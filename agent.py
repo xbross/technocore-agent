@@ -26,8 +26,9 @@ def cmd_init(cfg: Config, args) -> int:
         print(f"Une identite existe deja: {cfg.key_path}\nRien n'a ete modifie.")
         return 1
     import getpass, os
-    p1 = os.environ.get("TECHNOCORE_PASSPHRASE") or getpass.getpass("Choisissez une passphrase (ne s'affiche pas): ")
-    if not os.environ.get("TECHNOCORE_PASSPHRASE"):
+    from_store = bool(os.environ.get("TECHNOCORE_PASSPHRASE") or os.environ.get("TECHNOCORE_PASSPHRASE_KEYCHAIN"))
+    p1 = identity.passphrase_from_env_or_prompt("Choisissez une passphrase (ne s'affiche pas): ")
+    if not from_store:
         p2 = getpass.getpass("Confirmez la passphrase: ")
         if p1 != p2:
             print("Les deux saisies different. Rien n'a ete cree.")
