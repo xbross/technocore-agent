@@ -76,6 +76,10 @@ class Agent:
         self.client = client
         self.brain = brain
         self.rules = brain if isinstance(brain, RuleBrain) else RuleBrain()
+        # dans les rooms-torrent (mention_only), les regles ne repondent qu'a un sujet precis,
+        # et au plus une fois par `think_seconds`, pour ne pas inonder de reponses generiques
+        self.torrent_rules = RuleBrain(specific_only=True)
+        self.last_rules: dict[str, float] = {}
         self.state = state
         if cfg.mailbox_enabled and not state.mailbox:
             import secrets
@@ -231,11 +235,13 @@ class Agent:
         self.state.cursors[room] = page.last_seq
         self.state.save()
 
-        if rule_candidates:
+        if rule_candidates and time.time() - self.last_rules.get(room, 0.0) >= self.cfg.think_seconds:
             quota = min(self.replies_left(room), 1)
             if quota > 0:
-                self._post_decisions(room, self.rules.decide_batch(room, rule_candidates, ctx, quota),
-                                     rule_candidates, page.last_seq)
+                decisions = self.torrent_rules.decide_batch(room, rule_candidates, ctx, quota)
+                if decisions:
+                    self.last_rules[room] = time.time()
+                    self._post_decisions(room, decisions, rule_candidates, page.last_seq)
 
         # Le cerveau n'est consulte qu'une fois par `think_seconds` et par room (ou tout de suite
         # si on est mentionne, ou dans la boite aux lettres) : lire souvent ne doit pas multiplier

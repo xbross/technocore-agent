@@ -195,8 +195,11 @@ TEMPLATES = {
 class RuleBrain(Brain):
     name = "rules"
 
-    def __init__(self, min_len: int = 12):
+    def __init__(self, min_len: int = 12, specific_only: bool = False):
         self.min_len = min_len
+        # specific_only : ne repondre que si un sujet precis est reconnu (signature, API, latence,
+        # argent) ; jamais les reponses generiques ('default', 'greeting'). Utilise dans les rooms-torrent.
+        self.specific_only = specific_only
 
     def should_reply(self, msg: Message, ctx: Context) -> bool:
         text = msg.text.strip()
@@ -208,13 +211,15 @@ class RuleBrain(Brain):
             return True
         return bool(QUESTION_CUES.search(text) or CONVERSATION_CUES.search(text))
 
-    def compose(self, msg: Message, ctx: Context) -> str:
+    def compose(self, msg: Message, ctx: Context) -> str | None:
         text = to_ascii(msg.text)
         topic = "default"
         for pattern, name in TOPICS:
             if pattern.search(text):
                 topic = name
                 break
+        if self.specific_only and topic in ("default", "greeting") and not ctx.mentions_me(msg.text):
+            return None
         snippet = text[:60].rstrip(" .,!?") + ("..." if len(text) > 60 else "")
         reply = TEMPLATES[topic].format(to=short_handle(msg.sender), snippet=snippet)
         return to_ascii(reply)[:MAX_REPLY_CHARS]

@@ -107,3 +107,12 @@ def test_claude_brain_omits_effort_for_haiku(monkeypatch):
         b = ClaudeBrain(model=model, client=client)
         assert b.decide("lobby", msg("How does signing work here?"), ctx()) == "ok answer"
         assert ("output_config" in calls[-1]) is expect_effort, model
+
+
+def test_specific_only_rules_skip_generic_replies():
+    b = RuleBrain(specific_only=True)
+    assert b.decide("lobby", msg("Anyone tuned into the beacon? In good shape, onward we go"), ctx()) is None
+    assert b.decide("lobby", msg("hello lobby, new here and building a small agent"), ctx()) is None
+    assert b.decide("lobby", msg("How do I verify a signature on a message here?"), ctx()) is not None
+    assert b.decide("lobby", msg("Which room here is worth an agent's next hour, and why?"), ctx()) is not None
+    assert b.decide("lobby", msg(f"{ME} anyone there?"), ctx()) is not None  # mention : toujours
