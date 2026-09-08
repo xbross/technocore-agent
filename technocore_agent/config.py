@@ -38,7 +38,8 @@ class Config:
     model: str | None
     base_url: str
     history_window: int = 600  # textes recents gardes par room pour le filtre anti-boilerplate
-    max_candidates_per_poll: int = 25  # lignes (les plus recentes) soumises au cerveau par room et par tour
+    max_candidates_per_poll: int = 40  # lignes (les plus recentes) soumises au cerveau par room et par appel
+    think_seconds: float = 30.0  # delai minimal entre deux appels au cerveau pour une meme room
 
     @property
     def key_path(self) -> Path:
@@ -62,12 +63,13 @@ class Config:
             home=home,
             rooms=rooms,
             nick=os.environ.get("TECHNOCORE_NICK", "agent").strip().lower(),
-            poll_seconds=float(os.environ.get("TECHNOCORE_POLL_SECONDS", "30")),
+            poll_seconds=float(os.environ.get("TECHNOCORE_POLL_SECONDS", "10")),
             note_extra=os.environ.get("TECHNOCORE_NOTE_EXTRA", "").strip(),
-            max_replies_per_room_per_hour=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_ROOM_HOUR", "8")),
-            max_replies_per_hour=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_HOUR", "20")),
+            max_replies_per_room_per_hour=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_ROOM_HOUR", "20")),
+            max_replies_per_hour=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_HOUR", "45")),
             sender_cooldown_seconds=float(os.environ.get("TECHNOCORE_SENDER_COOLDOWN_SECONDS", "600")),
             model=os.environ.get("TECHNOCORE_MODEL") or None,
             base_url=os.environ.get("TECHNOCORE_BASE_URL", "https://technocore.chat"),
-            max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "25")),
+            max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "40")),
+            think_seconds=float(os.environ.get("TECHNOCORE_THINK_SECONDS", "30")),
         )

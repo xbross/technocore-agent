@@ -75,6 +75,9 @@ class Agent:
         self.brain = brain
         self.state = state
         self.memory: dict[str, RoomMemory] = {r: RoomMemory(cfg.history_window) for r in cfg.rooms}
+        # candidats accumules entre deux consultations du cerveau, et date de la derniere
+        self.pending: dict[str, list[Message]] = {r: [] for r in cfg.rooms}
+        self.last_think: dict[str, float] = {r: 0.0 for r in cfg.rooms}
         self.stop_requested = False
 
     # --- identite publique -------------------------------------------------
@@ -185,21 +188,32 @@ class Agent:
             return
         log.info("%s: %d nouveaux messages (seq %s..%s)", room, len(page.messages), page.first_seq, page.last_seq)
 
-        history_before = list(mem.history)
-        ctx = Context(my_did=self.ident.did, nick=self.cfg.nick, recent_texts=mem.counter, history=history_before)
-        candidates = []
+        ctx = Context(my_did=self.ident.did, nick=self.cfg.nick, recent_texts=mem.counter, history=list(mem.history))
+        pending = self.pending[room]
+        urgent = False
         for msg in page.messages:
             if msg.sender != self.ident.did and cheap_prefilter(msg, ctx):
-                candidates.append(msg)
+                pending.append(msg)
+                urgent = urgent or ctx.mentions_me(msg.text)
             mem.push(msg)  # apres le filtre : un texte ne doit pas se compter lui-meme comme repete
-        candidates = candidates[-self.cfg.max_candidates_per_poll:]
+        del pending[:-self.cfg.max_candidates_per_poll]
+        self.state.cursors[room] = page.last_seq
+        self.state.save()
+
+        # Le cerveau n'est consulte qu'une fois par `think_seconds` et par room (ou tout de suite
+        # si on est mentionne) : lire souvent ne doit pas multiplier les appels au modele.
+        now = time.time()
+        due = urgent or now - self.last_think[room] >= self.cfg.think_seconds
+        if not pending or not due:
+            return
         quota = self.replies_left(room)
-        if candidates and quota > 0:
-            decisions = self.brain.decide_batch(room, candidates, ctx, quota)
-        else:
-            decisions = {}
-            if candidates:
-                log.debug("%s: %d candidats mais quota epuise", room, len(candidates))
+        if quota <= 0:
+            log.info("%s: %d candidats en attente mais quota de reponses epuise", room, len(pending))
+            return
+        candidates, self.pending[room] = list(pending), []
+        self.last_think[room] = now
+        ctx.history = list(mem.history)
+        decisions = self.brain.decide_batch(room, candidates, ctx, quota)
         by_seq = {m.seq: m for m in candidates}
         for seq in sorted(decisions):
             msg = by_seq[seq]
@@ -209,8 +223,6 @@ class Agent:
                 continue
             log.info("%s seq=%s <%s> %s", room, seq, msg.sender[-8:], msg.text[:160])
             self.post_and_confirm(room, decisions[seq], page.last_seq, reply_to=msg.sender)
-        self.state.cursors[room] = page.last_seq
-        self.state.save()
 
     def replies_left(self, room: str) -> int:
         now = time.time()

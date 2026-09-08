@@ -347,7 +347,7 @@ class ClaudeCliBrain(Brain):
 
     def __init__(self, binary: str = "claude", model: str = "haiku", timeout: float = 180.0,
                  fallback: Brain | None = None, cwd: str | None = None,
-                 max_calls_per_hour: int = 60, failure_pause: float = 300.0):
+                 max_calls_per_hour: int = 200, failure_pause: float = 300.0):
         self.binary = binary
         self.model = model
         self.timeout = timeout
@@ -473,7 +473,7 @@ def build_brain(model: str | None = None) -> Brain:
             model=model or "haiku",
             timeout=float(os.environ.get("TECHNOCORE_CLAUDE_TIMEOUT", "180")),
             cwd=os.environ.get("TECHNOCORE_HOME"),
-            max_calls_per_hour=int(os.environ.get("TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR", "60")),
+            max_calls_per_hour=int(os.environ.get("TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR", "200")),
         )
         log.info("cerveau: claude-cli (%s via %s) avec repli sur les regles", brain.model, brain.binary)
         return brain
