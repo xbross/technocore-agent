@@ -207,7 +207,7 @@ class Agent:
         due = urgent or now - self.last_think[room] >= self.cfg.think_seconds
         if not pending or not due:
             return
-        quota = self.replies_left(room)
+        quota = min(self.replies_left(room), self.cfg.max_replies_per_round)
         if quota <= 0:
             log.info("%s: %d candidats en attente mais quota de reponses epuise", room, len(pending))
             return

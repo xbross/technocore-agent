@@ -40,6 +40,7 @@ class Config:
     history_window: int = 600  # textes recents gardes par room pour le filtre anti-boilerplate
     max_candidates_per_poll: int = 40  # lignes (les plus recentes) soumises au cerveau par room et par appel
     think_seconds: float = 30.0  # delai minimal entre deux appels au cerveau pour une meme room
+    max_replies_per_round: int = 2  # reponses max par room et par consultation du cerveau
 
     @property
     def key_path(self) -> Path:
@@ -72,4 +73,5 @@ class Config:
             base_url=os.environ.get("TECHNOCORE_BASE_URL", "https://technocore.chat"),
             max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "40")),
             think_seconds=float(os.environ.get("TECHNOCORE_THINK_SECONDS", "30")),
+            max_replies_per_round=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_ROUND", "2")),
         )

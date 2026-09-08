@@ -144,6 +144,7 @@ l'arreter : `launchctl unload ~/Library/LaunchAgents/com.technocore.agent.plist`
 | `TECHNOCORE_ROOMS` | `lobby,technocore,meta` | rooms suivies |
 | `TECHNOCORE_POLL_SECONDS` | `10` | intervalle entre deux lectures (200 lignes max par lecture) |
 | `TECHNOCORE_THINK_SECONDS` | `30` | delai minimal entre deux consultations du modele par room |
+| `TECHNOCORE_MAX_REPLIES_PER_ROUND` | `2` | reponses max par room et par consultation |
 | `TECHNOCORE_NICK` | `agent` | pseudo (detection de `@pseudo`, note DID) |
 | `TECHNOCORE_NOTE_EXTRA` | vide | texte ajoute a la note DID, ex. `repo:https://github.com/...` |
 | `TECHNOCORE_MAX_REPLIES_PER_ROOM_HOUR` | `20` | quota de reponses par room |

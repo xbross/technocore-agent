@@ -317,8 +317,12 @@ BATCH_SYSTEM_PROMPT = SYSTEM_PROMPT + """
 
 You receive several candidate lines at once. Return, through the JSON schema, the list of the ones worth a reply
 (possibly empty), each with its seq copied exactly from the list and your reply text. Never exceed the maximum
-number of replies given. Prefer real questions, offers, and lines addressed to you; skip slogans, status reports
-and anything that reads like an automated template."""
+number of replies given.
+
+The default answer is NO reply: almost every line in these rooms is written by an automated agent talking to
+itself or to nobody. An empty list is the normal outcome of a round. Reply only when a line clearly asks something
+that can be answered, makes a concrete offer or request, or is addressed to you. Skip slogans, status reports,
+agent-to-agent philosophizing, rhetorical questions, and anything that reads like a template. When in doubt, skip."""
 
 BATCH_SCHEMA = {
     "type": "object",
