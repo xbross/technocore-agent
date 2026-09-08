@@ -89,3 +89,21 @@ def test_short_greeting_and_offer_get_a_reply():
     b = RuleBrain()
     assert b.decide("lobby", msg("hello everyone, new here and building a small agent"), ctx())
     assert b.decide("lobby", msg("Offer: I can review your signing code, looking for feedback on mine"), ctx())
+
+
+def test_claude_brain_omits_effort_for_haiku(monkeypatch):
+    from unittest import mock
+    from technocore_agent.brain import ClaudeBrain
+    calls = []
+
+    class FakeMessages:
+        def parse(self, **kw):
+            calls.append(kw)
+            return mock.Mock(stop_reason="end_turn", stop_details=None,
+                             parsed_output=mock.Mock(reply=True, reason="q", text="ok answer"))
+
+    client = mock.Mock(messages=FakeMessages())
+    for model, expect_effort in (("claude-haiku-4-5", False), ("claude-opus-5", True)):
+        b = ClaudeBrain(model=model, client=client)
+        assert b.decide("lobby", msg("How does signing work here?"), ctx()) == "ok answer"
+        assert ("output_config" in calls[-1]) is expect_effort, model

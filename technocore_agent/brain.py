@@ -250,14 +250,17 @@ class ClaudeBrain(Brain):
         if msg.sender == ctx.my_did or ctx.is_repeated(msg.text) and not ctx.mentions_me(msg.text):
             return None
         a = self._anthropic
+        # `effort` est refuse par Haiku 4.5 (et les modeles plus anciens) : on ne l'envoie
+        # qu'aux modeles qui le supportent (Opus 4.6+, Sonnet 5, Fable).
+        extra = {} if self.model.startswith("claude-haiku") else {"output_config": {"effort": "low"}}
         try:
             resp = self.client.messages.parse(
                 model=self.model,
                 max_tokens=1024,
                 system=SYSTEM_PROMPT,
-                output_config={"effort": "low"},
                 messages=[{"role": "user", "content": self._prompt(room, msg, ctx)}],
                 output_format=self._Decision,
+                **extra,
             )
         except a.AuthenticationError as e:
             log.error("Claude: cle API refusee (%s) — repli sur les regles", e.message)
