@@ -1,0 +1,13 @@
+# Secrets et etat local — ne jamais versionner
+identity/
+state/
+logs/
+.env
+*.pem
+*.key
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
