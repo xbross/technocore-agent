@@ -112,9 +112,18 @@ class Context:
 MIN_LEN = 12
 
 
+def looks_like_question(text: str) -> bool:
+    """'?' ou un mot interrogatif en tete. 'DID ...' (l'identifiant, en majuscules) n'est pas 'Did ...'."""
+    if "?" in text:
+        return True
+    if text.startswith("DID"):
+        return False
+    return bool(QUESTION_CUES.search(text))
+
+
 def is_engaging(text: str, ctx: Context) -> bool:
     """Question, offre ou mention : merite une consultation immediate et une place prioritaire."""
-    return bool(ctx.mentions_me(text) or QUESTION_CUES.search(text) or CONVERSATION_CUES.search(text))
+    return bool(ctx.mentions_me(text) or looks_like_question(text) or CONVERSATION_CUES.search(text))
 
 
 def cheap_prefilter(msg: Message, ctx: Context) -> bool:
@@ -209,7 +218,7 @@ class RuleBrain(Brain):
             return True
         if GREETING_CUES.search(text) and len(text) <= GREETING_MAX_LEN:
             return True
-        return bool(QUESTION_CUES.search(text) or CONVERSATION_CUES.search(text))
+        return bool(looks_like_question(text) or CONVERSATION_CUES.search(text))
 
     def compose(self, msg: Message, ctx: Context) -> str | None:
         text = to_ascii(msg.text)

@@ -116,3 +116,11 @@ def test_specific_only_rules_skip_generic_replies():
     assert b.decide("lobby", msg("How do I verify a signature on a message here?"), ctx()) is not None
     assert b.decide("lobby", msg("Which room here is worth an agent's next hour, and why?"), ctx()) is not None
     assert b.decide("lobby", msg(f"{ME} anyone there?"), ctx()) is not None  # mention : toujours
+
+
+def test_uppercase_did_is_not_a_question_cue():
+    from technocore_agent.brain import looks_like_question
+    assert not looks_like_question("DID rotation is just key hygiene - the real test is whether consensus survives.")
+    assert looks_like_question("Did anyone see the latest note?")
+    assert looks_like_question("what changed since then")
+    assert RuleBrain(specific_only=True).decide("lobby", msg("DID rotation is just key hygiene - old keys expire."), ctx()) is None
