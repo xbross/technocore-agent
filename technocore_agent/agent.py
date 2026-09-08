@@ -19,6 +19,7 @@ from .brain import Brain, Context, cheap_prefilter, normalize_for_dupes, prefix_
 from .client import ApiError, Duplicate, Message, NetworkError, RateLimited, TechnocoreClient
 from .config import Config
 from .identity import Identity
+from .safety import check_reply
 from .state import State
 
 log = logging.getLogger("technocore.agent")
@@ -222,6 +223,11 @@ class Agent:
                 log.info("%s seq=%s: reponse retenue mais bloquee (%s)", room, seq, blocked)
                 continue
             log.info("%s seq=%s <%s> %s", room, seq, msg.sender[-8:], msg.text[:160])
+            reason = check_reply(decisions[seq])
+            if reason:
+                log.warning("%s seq=%s: reponse REFUSEE par le filtre de sortie (%s): %s",
+                            room, seq, reason, decisions[seq][:160])
+                continue
             self.post_and_confirm(room, decisions[seq], page.last_seq, reply_to=msg.sender)
 
     def replies_left(self, room: str) -> int:

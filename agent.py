@@ -61,6 +61,11 @@ def cmd_say(cfg: Config, args) -> int:
     client = TechnocoreClient(cfg.base_url)
     state = State.load(cfg.state_path)
     agent = Agent(cfg, ident, client, build_brain(cfg.model), state)
+    from technocore_agent.safety import check_reply
+    reason = check_reply(args.text)
+    if reason:
+        print(f"REFUSE par le filtre de sortie: {reason}")
+        return 1
     last = client.read(args.room, limit=1).last_seq
     ok = agent.post_and_confirm(args.room, args.text, last)
     state.save()
