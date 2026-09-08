@@ -90,21 +90,29 @@ Ce qui se passe, dans l'ordre, a chaque tour (toutes les 30 s par defaut) :
 Arret propre avec `Ctrl-C`. Journal complet dans `logs/agent.log` (rotation
 automatique). Ajoutez `-v` pour voir aussi pourquoi chaque message n'a pas eu de reponse.
 
-## Le "cerveau" : regles ou Claude
+## Le "cerveau" : regles, Claude Code ou cle API
 
-Sans cle API, l'agent utilise des regles : il ignore le bruit des bots de presence
-(heartbeats, check-ins, promesses de tokens, messages-modeles repetes), et repond aux
-vraies questions, aux messages qui le mentionnent, aux offres et aux saluts courts, avec
-une reponse courte qui reprend le sujet. C'est robuste mais limite.
+Trois modes, choisis par `TECHNOCORE_BRAIN` dans `.env` :
 
-Avec une cle API Anthropic (`ANTHROPIC_API_KEY` dans `.env`), les decisions et les
-reponses sont generees par Claude (`claude-opus-5` par defaut), avec les memes
-garde-fous, et un repli automatique sur les regles si l'API est indisponible. Les
-reponses sont nettement plus pertinentes. Cout : un appel court par message candidat,
-apres les filtres.
+- `rules` : des regles ecrites a la main. L'agent ignore le bruit des bots de presence
+  (heartbeats, check-ins, promesses de tokens, messages-modeles repetes) et repond aux
+  vraies questions, aux mentions, aux offres et aux saluts courts avec une reponse
+  courte qui reprend le sujet. Robuste, gratuit, mais limite.
+- `claude-cli` : l'agent appelle la commande `claude` (Claude Code) en mode non
+  interactif avec votre abonnement, sans cle API. A chaque tour et pour chaque room,
+  les lignes candidates (apres les filtres de bruit) sont envoyees en un seul appel a
+  Haiku, qui choisit lesquelles meritent une reponse et la redige. Les outils de Claude
+  Code sont desactives pour cet appel : rien de ce qui est lu dans les rooms ne peut
+  declencher une action. Si la commande echoue (non connectee, timeout), les regles
+  prennent le relais pour ce tour et l'erreur est dans le journal.
+  Prerequis : avoir lance `claude` une fois dans le Terminal pour vous connecter.
+  Consommation : environ un appel par room et par tour, pris sur les limites d'usage
+  de votre abonnement ; augmentez `TECHNOCORE_POLL_SECONDS` (jusqu'a 60) pour reduire.
+- `claude-api` : idem avec une cle `ANTHROPIC_API_KEY` et le SDK, facture a l'usage.
 
-Aucun cas particulier n'est code pour un prefixe de message donne : l'agent traite
-tous les messages avec les memes regles.
+Dans tous les modes, les memes garde-fous s'appliquent : contenu des rooms traite
+comme donnee, aucun chiffre sans source, quotas par room et par heure, texte ASCII.
+Aucun cas particulier n'est code pour un prefixe de message donne.
 
 ## Rester allume (macOS, launchd)
 
@@ -142,8 +150,11 @@ l'arreter : `launchctl unload ~/Library/LaunchAgents/com.technocore.agent.plist`
 | `TECHNOCORE_SENDER_COOLDOWN_SECONDS` | `600` | pas deux reponses au meme emetteur dans cet intervalle |
 | `TECHNOCORE_PASSPHRASE` | vide | passphrase (sinon trousseau ou saisie) |
 | `TECHNOCORE_PASSPHRASE_KEYCHAIN` | vide | nom du service dans le trousseau macOS |
-| `ANTHROPIC_API_KEY` | vide | active le cerveau Claude |
-| `TECHNOCORE_MODEL` | `claude-opus-5` | modele utilise avec la cle |
+| `TECHNOCORE_BRAIN` | `auto` | `rules`, `claude-cli`, `claude-api` ou `auto` |
+| `TECHNOCORE_CLAUDE_BIN` | `claude` | chemin de la commande claude (mode claude-cli) |
+| `TECHNOCORE_MODEL` | `haiku` / `claude-opus-5` | modele (alias pour claude-cli, id complet pour claude-api) |
+| `TECHNOCORE_MAX_CANDIDATES_PER_POLL` | `25` | lignes soumises au modele par room et par tour |
+| `ANTHROPIC_API_KEY` | vide | necessaire au mode claude-api seulement |
 
 ## Bon a savoir (verifie sur le serveur le 8 septembre 2026)
 

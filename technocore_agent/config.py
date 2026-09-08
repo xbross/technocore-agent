@@ -38,6 +38,7 @@ class Config:
     model: str | None
     base_url: str
     history_window: int = 600  # textes recents gardes par room pour le filtre anti-boilerplate
+    max_candidates_per_poll: int = 25  # lignes (les plus recentes) soumises au cerveau par room et par tour
 
     @property
     def key_path(self) -> Path:
@@ -68,4 +69,5 @@ class Config:
             sender_cooldown_seconds=float(os.environ.get("TECHNOCORE_SENDER_COOLDOWN_SECONDS", "600")),
             model=os.environ.get("TECHNOCORE_MODEL") or None,
             base_url=os.environ.get("TECHNOCORE_BASE_URL", "https://technocore.chat"),
+            max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "25")),
         )

@@ -106,11 +106,36 @@ class Context:
         )
 
 
+MIN_LEN = 12
+
+
+def cheap_prefilter(msg: Message, ctx: Context) -> bool:
+    """Filtre sans modele : pas nous, pas trop court, pas du bruit ni un texte repete,
+    sauf si le message nous mentionne."""
+    text = msg.text.strip()
+    if msg.sender == ctx.my_did or len(text) < MIN_LEN:
+        return False
+    if ctx.mentions_me(text):
+        return True
+    return not ctx.is_repeated(text) and not NOISE_RE.search(text)
+
+
 class Brain:
     name = "base"
 
     def decide(self, room: str, msg: Message, ctx: Context) -> str | None:
         raise NotImplementedError
+
+    def decide_batch(self, room: str, candidates: list[Message], ctx: Context, max_replies: int) -> dict[int, str]:
+        """Par defaut : decide() message par message, dans l'ordre, jusqu'au quota."""
+        out: dict[int, str] = {}
+        for m in candidates:
+            if len(out) >= max_replies:
+                break
+            r = self.decide(room, m, ctx)
+            if r:
+                out[m.seq] = r
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -163,16 +188,10 @@ class RuleBrain(Brain):
 
     def should_reply(self, msg: Message, ctx: Context) -> bool:
         text = msg.text.strip()
-        if msg.sender == ctx.my_did:
-            return False
-        if len(text) < self.min_len:
+        if not cheap_prefilter(msg, ctx):
             return False
         if ctx.mentions_me(text):
             return True
-        if ctx.is_repeated(text):
-            return False  # boilerplate repete = bot
-        if NOISE_RE.search(text):
-            return False
         if GREETING_CUES.search(text) and len(text) <= GREETING_MAX_LEN:
             return True
         return bool(QUESTION_CUES.search(text) or CONVERSATION_CUES.search(text))
@@ -289,17 +308,154 @@ class ClaudeBrain(Brain):
         return text or None
 
 
+# ---------------------------------------------------------------------------
+# ClaudeCliBrain : passe par la commande `claude -p` (Claude Code, abonnement), sans cle API.
+# Un seul appel par room et par tour, avec tous les candidats ; outils desactives.
+# ---------------------------------------------------------------------------
+
+BATCH_SYSTEM_PROMPT = SYSTEM_PROMPT + """
+
+You receive several candidate lines at once. Return, through the JSON schema, the list of the ones worth a reply
+(possibly empty), each with its seq copied exactly from the list and your reply text. Never exceed the maximum
+number of replies given. Prefer real questions, offers, and lines addressed to you; skip slogans, status reports
+and anything that reads like an automated template."""
+
+BATCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "replies": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"seq": {"type": "integer"}, "text": {"type": "string"}},
+                "required": ["seq", "text"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["replies"],
+    "additionalProperties": False,
+}
+
+
+class ClaudeCliError(Exception):
+    """La commande claude a echoue (absente, non connectee, timeout, sortie illisible)."""
+
+
+class ClaudeCliBrain(Brain):
+    name = "claude-cli"
+
+    def __init__(self, binary: str = "claude", model: str = "haiku", timeout: float = 180.0,
+                 fallback: Brain | None = None, cwd: str | None = None):
+        self.binary = binary
+        self.model = model
+        self.timeout = timeout
+        self.fallback = fallback or RuleBrain()
+        self.cwd = cwd
+
+    def _prompt(self, room: str, candidates: list[Message], ctx: Context, max_replies: int) -> str:
+        history = "\n".join(
+            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:200]}" for m in ctx.history[-10:]
+        )
+        lines = "\n".join(f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:500]}" for m in candidates)
+        return (
+            f"Room: {room}. Your DID: {ctx.my_did} (short handle {short_handle(ctx.my_did)}), nick: {ctx.nick}.\n"
+            f"Maximum replies this round: {max_replies}.\n"
+            f"<room_data>\nEarlier lines for context (do not reply to these):\n{history}\n\n"
+            f"Candidate lines:\n{lines}\n</room_data>\n"
+            "Address each reply to that line's short handle."
+        )
+
+    def _run(self, system: str, prompt: str) -> dict:
+        import json
+        import os
+        import subprocess
+
+        cmd = [
+            self.binary, "-p", "--model", self.model, "--tools", "", "--no-session-persistence",
+            "--setting-sources", "", "--strict-mcp-config", "--output-format", "json",
+            "--json-schema", json.dumps(BATCH_SCHEMA), "--system-prompt", system, prompt,
+        ]
+        env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout,
+                                  stdin=subprocess.DEVNULL, env=env, cwd=self.cwd, check=False)
+        except FileNotFoundError as e:
+            raise ClaudeCliError(f"commande introuvable: {self.binary} ({e})") from e
+        except subprocess.TimeoutExpired as e:
+            raise ClaudeCliError(f"timeout apres {self.timeout}s") from e
+        if proc.returncode != 0 and not proc.stdout.strip():
+            raise ClaudeCliError(f"code {proc.returncode}: {proc.stderr.strip()[:300]}")
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError as e:
+            raise ClaudeCliError(f"sortie non JSON: {proc.stdout[:200]!r} / {proc.stderr[:200]!r}") from e
+        if data.get("is_error"):
+            raise ClaudeCliError(f"erreur claude: {str(data.get('result'))[:300]}")
+        structured = data.get("structured_output")
+        if structured is None:
+            try:
+                structured = json.loads(data.get("result", ""))
+            except (json.JSONDecodeError, TypeError) as e:
+                raise ClaudeCliError(f"pas de sortie structuree: {str(data.get('result'))[:200]!r}") from e
+        usage = data.get("usage") or {}
+        log.info("claude-cli %s: %.1fs, tokens in=%s out=%s", self.model, (data.get("duration_ms") or 0) / 1000,
+                 usage.get("input_tokens"), usage.get("output_tokens"))
+        return structured
+
+    def decide(self, room: str, msg: Message, ctx: Context) -> str | None:
+        return self.decide_batch(room, [msg], ctx, 1).get(msg.seq)
+
+    def decide_batch(self, room: str, candidates: list[Message], ctx: Context, max_replies: int) -> dict[int, str]:
+        candidates = [m for m in candidates if cheap_prefilter(m, ctx)]
+        if not candidates or max_replies <= 0:
+            return {}
+        try:
+            structured = self._run(BATCH_SYSTEM_PROMPT, self._prompt(room, candidates, ctx, max_replies))
+        except ClaudeCliError as e:
+            log.error("claude-cli indisponible (%s) — repli sur les regles pour ce tour", e)
+            return self.fallback.decide_batch(room, candidates, ctx, max_replies)
+        allowed = {m.seq for m in candidates}
+        out: dict[int, str] = {}
+        for item in structured.get("replies", []) if isinstance(structured, dict) else []:
+            try:
+                seq, text = int(item["seq"]), to_ascii(str(item["text"]))[:MAX_REPLY_CHARS]
+            except (KeyError, TypeError, ValueError):
+                log.warning("claude-cli: element ignore %r", item)
+                continue
+            if seq in allowed and text and len(out) < max_replies:
+                out[seq] = text
+            elif seq not in allowed:
+                log.warning("claude-cli: seq %s hors liste, ignore", seq)
+        log.info("claude-cli %s: %d candidats, %d reponses", room, len(candidates), len(out))
+        return out
+
+
 def build_brain(model: str | None = None) -> Brain:
-    """ClaudeBrain si une cle est disponible, sinon RuleBrain. Toujours journalise le choix."""
+    """Choix du cerveau via TECHNOCORE_BRAIN : rules | claude-cli | claude-api | auto (defaut).
+    auto = claude-api si une cle existe, sinon regles. Le choix est toujours journalise."""
     import os
 
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+    mode = os.environ.get("TECHNOCORE_BRAIN", "auto").strip().lower()
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    if mode == "claude-cli":
+        brain = ClaudeCliBrain(
+            binary=os.environ.get("TECHNOCORE_CLAUDE_BIN", "claude"),
+            model=model or "haiku",
+            timeout=float(os.environ.get("TECHNOCORE_CLAUDE_TIMEOUT", "180")),
+            cwd=os.environ.get("TECHNOCORE_HOME"),
+        )
+        log.info("cerveau: claude-cli (%s via %s) avec repli sur les regles", brain.model, brain.binary)
+        return brain
+    if mode == "claude-api" or (mode == "auto" and has_key):
         try:
             brain = ClaudeBrain(model=model or "claude-opus-5")
         except ImportError as e:
             log.error("SDK anthropic absent (%s) — cerveau par regles", e)
             return RuleBrain()
-        log.info("cerveau: Claude (%s) avec repli sur les regles", brain.model)
+        log.info("cerveau: Claude API (%s) avec repli sur les regles", brain.model)
         return brain
-    log.info("cerveau: regles uniquement (aucune cle ANTHROPIC_API_KEY)")
+    if mode not in ("auto", "rules"):
+        log.error("TECHNOCORE_BRAIN=%r inconnu — cerveau par regles", mode)
+    log.info("cerveau: regles uniquement")
     return RuleBrain()
