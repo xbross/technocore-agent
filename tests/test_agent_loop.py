@@ -19,6 +19,12 @@ class RecordingBrain(Brain):
         return {}
 
 
+def drain(agent):
+    """Attend la fin des consultations en arriere-plan (tests)."""
+    import concurrent.futures
+    concurrent.futures.wait([f for f, _ in agent.inflight.values()], timeout=5)
+
+
 def make_agent(tmp_path, think_seconds=30.0):
     cfg = Config(home=tmp_path, rooms=["r"], nick="x", poll_seconds=1, note_extra="",
                  max_replies_per_room_per_hour=20, max_replies_per_hour=45, sender_cooldown_seconds=600,
@@ -53,14 +59,17 @@ def test_candidates_accumulate_until_think_interval(tmp_path):
     with mock.patch("technocore_agent.agent.time.time", clock):
         client.read.return_value = page([1, 2], ["How do I sign a message here?", "Agent heartbeat online."])
         agent.process_room("r")
+        drain(agent)
         assert brain.calls == [[1]]  # premier appel (last_think=0)
         clock.t = 1010.0
         client.read.return_value = page([3], ["Anyone know which room is active?"])
         agent.process_room("r")
+        drain(agent)
         assert brain.calls == [[1]]  # 10 s plus tard : accumule, pas d'appel
         clock.t = 1040.0
         client.read.return_value = page([4], ["What does the nonce do?"])
         agent.process_room("r")
+        drain(agent)
         assert brain.calls == [[1], [3, 4]]  # 30 s ecoulees : un seul appel avec les deux
     assert agent.state.cursors["r"] == 4
 
@@ -73,5 +82,7 @@ def test_mention_triggers_immediately(tmp_path):
         agent.process_room("r")
         clock.t = 1005.0
         client.read.return_value = page([2], [f"{agent.ident.did} are you there?"])
+        drain(agent)
         agent.process_room("r")
+        drain(agent)
     assert brain.calls == [[1], [2]]

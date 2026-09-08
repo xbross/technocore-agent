@@ -4,7 +4,7 @@ from technocore_agent.agent import Agent
 from technocore_agent.brain import Context, cheap_prefilter
 from technocore_agent.client import Message, RoomPage
 from technocore_agent.state import State
-from tests.test_agent_loop import Clock, RecordingBrain, make_agent, page
+from tests.test_agent_loop import Clock, RecordingBrain, drain, make_agent, page
 
 ME = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp"
 
@@ -43,9 +43,11 @@ def test_mailbox_is_urgent_and_mention_only_room_routes_to_rules(tmp_path):
     with mock.patch("technocore_agent.agent.time.time", clock):
         client.read.return_value = page([1], ["How do I sign a message here?"])
         agent.process_room("r")
+        drain(agent)
         assert brain.calls == []  # pas de mention : les regles, pas le modele
         client.read.return_value = page([2], [f"{agent.ident.did} how do I sign?"])
         agent.process_room("r")
+        drain(agent)
         assert brain.calls == [[2]]  # mention : le modele, tout de suite
         mb = agent.state.mailbox
         agent.state.cursors[mb] = 0
@@ -53,6 +55,7 @@ def test_mailbox_is_urgent_and_mention_only_room_routes_to_rules(tmp_path):
         client.read.return_value = RoomPage(room=mb, first_seq=5, last_seq=5, messages=[
             Message(seq=5, ts="", sender="did:key:z6MkZ", text="Hello, are you open to a collaboration?", nonce=1, sig="s")])
         agent.process_room(mb)
+        drain(agent)
         assert brain.calls == [[2], [5]]  # boite aux lettres : toujours urgent
 
 
@@ -81,3 +84,40 @@ def test_stats_parses_log(tmp_path):
     assert c["appels_modele"] == 1 and c["tokens_in"] == 2510 and c["reponses_envoyees"] == 1
     assert c["reponses_confirmees"] == 1 and c["refus_filtre"] == 1
     assert "appels au modele        : 1" in render(c, 24)
+
+
+def test_reads_continue_while_brain_is_slow(tmp_path):
+    import threading
+    agent, client, brain = make_agent(tmp_path)
+    gate = threading.Event()
+
+    class SlowBrain(RecordingBrain):
+        def decide_batch(self, room, candidates, ctx, max_replies):
+            gate.wait(5)
+            return {candidates[0].seq: "slow but fine answer"}
+
+    agent.brain = SlowBrain()
+    clock = Clock(1000.0)
+    with mock.patch("technocore_agent.agent.time.time", clock):
+        client.read.return_value = page([1], ["How do I sign a message here?"])
+        agent.process_room("r")  # lance la consultation, ne bloque pas
+        assert "r" in agent.inflight and agent.state.cursors["r"] == 1
+        clock.t = 1010.0
+        client.read.return_value = page([2], ["Agent heartbeat online."])
+        agent.process_room("r")  # lecture suivante pendant que le cerveau reflechit
+        assert agent.state.cursors["r"] == 2 and client.say_signed.call_count == 0
+        gate.set()
+        drain(agent)
+        clock.t = 1020.0
+        client.read.return_value = page([3], ["ok"])
+        agent.process_room("r")  # la reponse est publiee au tour suivant
+    assert client.say_signed.call_count == 1
+    assert client.say_signed.call_args[0][2] == "slow but fine answer"
+
+
+def test_sender_cooldown_is_per_room(tmp_path):
+    s = State.load(tmp_path / "s.json")
+    s.record_reply("technocore", "did:key:zProbe", now=1000.0)
+    assert s.replied_to_sender_since("did:key:zProbe", 120, now=1010.0, room="technocore")
+    assert not s.replied_to_sender_since("did:key:zProbe", 120, now=1010.0, room="meta")
+    assert not s.replied_to_sender_since("did:key:zProbe", 120, now=1200.0, room="technocore")

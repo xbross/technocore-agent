@@ -61,9 +61,12 @@ class State:
         now = now or time.time()
         return sum(1 for r in self.recent_replies if r["room"] == room and now - r["at"] < seconds)
 
-    def replied_to_sender_since(self, sender: str, seconds: float, now: float | None = None) -> bool:
+    def replied_to_sender_since(self, sender: str, seconds: float, now: float | None = None,
+                                room: str | None = None) -> bool:
+        """Vrai si on a repondu a cet emetteur (dans cette room si `room` est donnee) depuis `seconds`."""
         now = now or time.time()
-        return any(r["sender"] == sender and now - r["at"] < seconds for r in self.recent_replies)
+        return any(r["sender"] == sender and now - r["at"] < seconds and (room is None or r["room"] == room)
+                   for r in self.recent_replies)
 
     def block(self, sender: str, reason: str, now: float | None = None) -> None:
         self.blocked[sender] = {"reason": reason, "at": now or time.time()}

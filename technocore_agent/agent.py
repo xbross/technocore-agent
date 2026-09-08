@@ -10,6 +10,7 @@ Principes :
 from __future__ import annotations
 
 import collections
+import concurrent.futures
 import logging
 import signal
 import time
@@ -89,6 +90,10 @@ class Agent:
         # candidats accumules entre deux consultations du cerveau, et date de la derniere
         self.pending: dict[str, list[Message]] = {r: [] for r in self.rooms}
         self.last_think: dict[str, float] = {r: 0.0 for r in self.rooms}
+        # Les consultations du cerveau tournent en arriere-plan (une par room au plus) pour que
+        # les lectures continuent pendant un appel long. Les envois restent dans le fil principal.
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(self.rooms), thread_name_prefix="think")
+        self.inflight: dict[str, tuple[concurrent.futures.Future, list[Message]]] = {}
         self.stop_requested = False
 
     # --- identite publique -------------------------------------------------
@@ -134,8 +139,8 @@ class Agent:
             return "quota room/heure atteint"
         if sum(1 for r in st.recent_replies if time.time() - r["at"] < 3600) >= cfg.max_replies_per_hour:
             return "quota global/heure atteint"
-        if st.replied_to_sender_since(msg.sender, cfg.sender_cooldown_seconds):
-            return "deja repondu a cet emetteur recemment"
+        if st.replied_to_sender_since(msg.sender, cfg.sender_cooldown_seconds, room=room):
+            return "deja repondu a cet emetteur dans cette room recemment"
         return None
 
     # --- ecriture + confirmation -------------------------------------------
@@ -229,9 +234,10 @@ class Agent:
         # Le cerveau n'est consulte qu'une fois par `think_seconds` et par room (ou tout de suite
         # si on est mentionne, ou dans la boite aux lettres) : lire souvent ne doit pas multiplier
         # les appels au modele.
+        self.collect_decisions(room, page.last_seq)
         now = time.time()
         due = urgent or now - self.last_think[room] >= self.cfg.think_seconds
-        if not pending or not due:
+        if not pending or not due or room in self.inflight:
             return
         quota = min(self.replies_left(room), self.cfg.max_replies_per_round)
         if quota <= 0:
@@ -240,7 +246,31 @@ class Agent:
         candidates, self.pending[room] = list(pending), []
         self.last_think[room] = now
         ctx.history = list(mem.history)
-        self._post_decisions(room, self.brain.decide_batch(room, candidates, ctx, quota), candidates, page.last_seq)
+        future = self.executor.submit(self.brain.decide_batch, room, candidates, ctx, quota)
+        self.inflight[room] = (future, candidates)
+        log.debug("%s: consultation du cerveau lancee en arriere-plan (%d candidats)", room, len(candidates))
+
+    def collect_decisions(self, room: str, last_seq: int | None) -> None:
+        """Recupere le resultat d'une consultation terminee et envoie les reponses (fil principal)."""
+        entry = self.inflight.get(room)
+        if not entry or not entry[0].done():
+            return
+        future, candidates = self.inflight.pop(room)
+        try:
+            decisions = future.result()
+        except Exception:  # noqa: BLE001 — le cerveau a plante : journaliser, ne pas tuer la boucle
+            log.exception("%s: la consultation du cerveau a echoue", room)
+            return
+        self._post_decisions(room, decisions, candidates, last_seq if last_seq is not None else self.state.cursors.get(room, 0))
+
+    def wait_for_thinking(self, timeout: float) -> None:
+        """A l'arret : laisser finir les consultations en cours et publier leurs reponses."""
+        futures = [f for f, _ in self.inflight.values()]
+        if futures:
+            concurrent.futures.wait(futures, timeout=timeout)
+            for room in list(self.inflight):
+                self.collect_decisions(room, self.state.cursors.get(room))
+        self.executor.shutdown(wait=False, cancel_futures=True)
 
     def _post_decisions(self, room: str, decisions: dict[int, str], candidates: list[Message], last_seq: int) -> None:
         by_seq = {m.seq: m for m in candidates}
@@ -313,6 +343,7 @@ class Agent:
                 log.exception("erreur inattendue dans la boucle — nouvel essai dans %.0fs", backoff)
                 self._sleep(backoff)
                 backoff = min(backoff * 2, BACKOFF_MAX)
+        self.wait_for_thinking(timeout=60)
         self.state.save()
         log.info("arret: etat sauvegarde dans %s", self.state.path)
 

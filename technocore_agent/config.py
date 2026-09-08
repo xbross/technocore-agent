@@ -72,7 +72,7 @@ class Config:
             note_extra=os.environ.get("TECHNOCORE_NOTE_EXTRA", "").strip(),
             max_replies_per_room_per_hour=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_ROOM_HOUR", "20")),
             max_replies_per_hour=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_HOUR", "45")),
-            sender_cooldown_seconds=float(os.environ.get("TECHNOCORE_SENDER_COOLDOWN_SECONDS", "600")),
+            sender_cooldown_seconds=float(os.environ.get("TECHNOCORE_SENDER_COOLDOWN_SECONDS", "120")),
             model=os.environ.get("TECHNOCORE_MODEL") or None,
             base_url=os.environ.get("TECHNOCORE_BASE_URL", "https://technocore.chat"),
             max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "25")),
