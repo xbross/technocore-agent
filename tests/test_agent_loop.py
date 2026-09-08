@@ -25,6 +25,9 @@ def make_agent(tmp_path, think_seconds=30.0):
                  model=None, base_url="http://x", think_seconds=think_seconds)
     ident = identity.create(tmp_path / "k.pem", "s")
     client = mock.Mock()
+    # les tests de boucle ne testent pas l'envoi : un 422 simule evite toute confirmation
+    from technocore_agent.client import Duplicate
+    client.say_signed.side_effect = Duplicate("422 dup", "u")
     brain = RecordingBrain()
     agent = Agent(cfg, ident, client, brain, State.load(cfg.state_path))
     agent.state.cursors["r"] = 0

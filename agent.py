@@ -5,6 +5,8 @@
   python agent.py whoami          affiche le DID, l'empreinte et la note publiee
   python agent.py say ROOM TEXTE  envoie un message signe et verifie qu'il est passe
   python agent.py run             boucle autonome (Ctrl-C pour arreter proprement)
+  python agent.py stats [--hours N]  bilan chiffre du journal (defaut 24 h)
+  python agent.py block DID [raison] / unblock DID   liste de blocage par emetteur
 """
 
 from __future__ import annotations
@@ -60,7 +62,7 @@ def cmd_say(cfg: Config, args) -> int:
     ident = load_identity(cfg)
     client = TechnocoreClient(cfg.base_url)
     state = State.load(cfg.state_path)
-    agent = Agent(cfg, ident, client, build_brain(cfg.model), state)
+    agent = Agent(cfg, ident, client, build_brain(cfg.model, debug_dir=str(cfg.log_path.parent)), state)
     from technocore_agent.safety import check_reply
     reason = check_reply(args.text)
     if reason:
@@ -78,8 +80,29 @@ def cmd_run(cfg: Config, args) -> int:
     ident = load_identity(cfg)
     client = TechnocoreClient(cfg.base_url)
     state = State.load(cfg.state_path)
-    agent = Agent(cfg, ident, client, build_brain(cfg.model), state)
+    agent = Agent(cfg, ident, client, build_brain(cfg.model, debug_dir=str(cfg.log_path.parent)), state)
     agent.run(max_cycles=args.cycles)
+    return 0
+
+
+def cmd_stats(cfg: Config, args) -> int:
+    from technocore_agent.stats import compute, render
+    print(render(compute(cfg.log_path, args.hours), args.hours))
+    return 0
+
+
+def cmd_block(cfg: Config, args) -> int:
+    state = State.load(cfg.state_path)
+    if args.cmd == "block":
+        state.block(args.did, args.reason or "manuel")
+        print(f"bloque: {args.did}")
+    else:
+        if state.blocked.pop(args.did, None) is None:
+            print(f"{args.did} n'etait pas bloque")
+        else:
+            print(f"debloque: {args.did}")
+    state.save()
+    print(f"{len(state.blocked)} emetteur(s) bloque(s). Relancez le service pour appliquer.")
     return 0
 
 
@@ -94,10 +117,18 @@ def main(argv=None) -> int:
     p_run = sub.add_parser("run")
     p_run.add_argument("--cycles", type=int, default=None, help="s'arreter apres N tours (tests)")
     p_run.add_argument("-v", "--verbose", action="store_true")
+    p_stats = sub.add_parser("stats")
+    p_stats.add_argument("--hours", type=float, default=24.0)
+    p_block = sub.add_parser("block")
+    p_block.add_argument("did")
+    p_block.add_argument("reason", nargs="?", default="")
+    p_unblock = sub.add_parser("unblock")
+    p_unblock.add_argument("did")
     args = parser.parse_args(argv)
     cfg = Config.from_env()
     try:
-        return {"init": cmd_init, "whoami": cmd_whoami, "say": cmd_say, "run": cmd_run}[args.cmd](cfg, args)
+        return {"init": cmd_init, "whoami": cmd_whoami, "say": cmd_say, "run": cmd_run,
+                "stats": cmd_stats, "block": cmd_block, "unblock": cmd_block}[args.cmd](cfg, args)
     except identity.IdentityError as e:
         print(f"Erreur d'identite: {e}", file=sys.stderr)
         return 2

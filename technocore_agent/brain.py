@@ -88,6 +88,8 @@ class Context:
     recent_texts: collections.Counter = field(default_factory=collections.Counter)
     # dernieres lignes de la room (pour ClaudeBrain), du plus ancien au plus recent
     history: list[Message] = field(default_factory=list)
+    blocked: set = field(default_factory=set)  # DIDs ignores
+    signed_only: bool = True
 
     def is_repeated(self, text: str, threshold: int = 2, prefix_threshold: int = 3) -> bool:
         """Vrai si le texte exact est deja passe `threshold` fois, ou son debut `prefix_threshold` fois."""
@@ -114,6 +116,10 @@ def cheap_prefilter(msg: Message, ctx: Context) -> bool:
     sauf si le message nous mentionne."""
     text = msg.text.strip()
     if msg.sender == ctx.my_did or len(text) < MIN_LEN:
+        return False
+    if msg.sender in ctx.blocked:
+        return False
+    if ctx.signed_only and not msg.signed:
         return False
     if ctx.mentions_me(text):
         return True
@@ -256,7 +262,7 @@ class ClaudeBrain(Brain):
 
     def _prompt(self, room: str, msg: Message, ctx: Context) -> str:
         history = "\n".join(
-            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:300]}" for m in ctx.history[-12:]
+            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:300]}" for m in ctx.history[-5:]
         )
         return (
             f"Room: {room}. Your DID: {ctx.my_did} (short handle {short_handle(ctx.my_did)}), nick: {ctx.nick}.\n"
@@ -351,7 +357,8 @@ class ClaudeCliBrain(Brain):
 
     def __init__(self, binary: str = "claude", model: str = "haiku", timeout: float = 180.0,
                  fallback: Brain | None = None, cwd: str | None = None,
-                 max_calls_per_hour: int = 200, failure_pause: float = 300.0):
+                 max_calls_per_hour: int = 200, failure_pause: float = 300.0, debug_dir: str | None = None):
+        self.debug_dir = debug_dir  # si defini, le dernier resultat brut y est ecrit (last_claude_result.json)
         self.binary = binary
         self.model = model
         self.timeout = timeout
@@ -381,7 +388,7 @@ class ClaudeCliBrain(Brain):
 
     def _prompt(self, room: str, candidates: list[Message], ctx: Context, max_replies: int) -> str:
         history = "\n".join(
-            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:200]}" for m in ctx.history[-10:]
+            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:200]}" for m in ctx.history[-5:]
         )
         lines = "\n".join(f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:300]}" for m in candidates)
         return (
@@ -425,8 +432,15 @@ class ClaudeCliBrain(Brain):
             except (json.JSONDecodeError, TypeError) as e:
                 raise ClaudeCliError(f"pas de sortie structuree: {str(data.get('result'))[:200]!r}") from e
         usage = data.get("usage") or {}
-        log.info("claude-cli %s: %.1fs, tokens in=%s out=%s", self.model, (data.get("duration_ms") or 0) / 1000,
-                 usage.get("input_tokens"), usage.get("output_tokens"))
+        log.info("claude-cli %s: %.1fs, tokens in=%s out=%s cache_read=%s turns=%s", self.model,
+                 (data.get("duration_ms") or 0) / 1000, usage.get("input_tokens"), usage.get("output_tokens"),
+                 usage.get("cache_read_input_tokens"), data.get("num_turns"))
+        if self.debug_dir:
+            try:
+                import pathlib
+                pathlib.Path(self.debug_dir, "last_claude_result.json").write_text(proc.stdout, "utf-8")
+            except OSError as e:
+                log.warning("impossible d'ecrire last_claude_result.json: %s", e)
         return structured
 
     def decide(self, room: str, msg: Message, ctx: Context) -> str | None:
@@ -464,7 +478,7 @@ class ClaudeCliBrain(Brain):
         return out
 
 
-def build_brain(model: str | None = None) -> Brain:
+def build_brain(model: str | None = None, debug_dir: str | None = None) -> Brain:
     """Choix du cerveau via TECHNOCORE_BRAIN : rules | claude-cli | claude-api | auto (defaut).
     auto = claude-api si une cle existe, sinon regles. Le choix est toujours journalise."""
     import os
@@ -478,6 +492,7 @@ def build_brain(model: str | None = None) -> Brain:
             timeout=float(os.environ.get("TECHNOCORE_CLAUDE_TIMEOUT", "180")),
             cwd=os.environ.get("TECHNOCORE_HOME"),
             max_calls_per_hour=int(os.environ.get("TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR", "200")),
+            debug_dir=debug_dir,
         )
         log.info("cerveau: claude-cli (%s via %s) avec repli sur les regles", brain.model, brain.binary)
         return brain

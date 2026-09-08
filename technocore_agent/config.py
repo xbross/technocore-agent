@@ -38,9 +38,13 @@ class Config:
     model: str | None
     base_url: str
     history_window: int = 600  # textes recents gardes par room pour le filtre anti-boilerplate
-    max_candidates_per_poll: int = 40  # lignes (les plus recentes) soumises au cerveau par room et par appel
+    max_candidates_per_poll: int = 25  # lignes (les plus recentes) soumises au cerveau par room et par appel
     think_seconds: float = 30.0  # delai minimal entre deux appels au cerveau pour une meme room
     max_replies_per_round: int = 2  # reponses max par room et par consultation du cerveau
+    signed_only: bool = True  # ignorer les emetteurs non signes (un pseudo est forgeable, un DID non)
+    mention_only_rooms: tuple = ("lobby",)  # rooms ou le modele n'est consulte que si on est mentionne
+    mailbox_enabled: bool = True  # boite aux lettres mb-p-<aleatoire>, annoncee dans la note DID
+    auto_block_after: int = 3  # blocage d'un emetteur apres N reponses refusees par le filtre de sortie
 
     @property
     def key_path(self) -> Path:
@@ -71,7 +75,11 @@ class Config:
             sender_cooldown_seconds=float(os.environ.get("TECHNOCORE_SENDER_COOLDOWN_SECONDS", "600")),
             model=os.environ.get("TECHNOCORE_MODEL") or None,
             base_url=os.environ.get("TECHNOCORE_BASE_URL", "https://technocore.chat"),
-            max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "40")),
+            max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "25")),
+            signed_only=os.environ.get("TECHNOCORE_SIGNED_ONLY", "1") not in ("0", "false", "no"),
+            mention_only_rooms=tuple(r.strip() for r in os.environ.get("TECHNOCORE_MENTION_ONLY_ROOMS", "lobby").split(",") if r.strip()),
+            mailbox_enabled=os.environ.get("TECHNOCORE_MAILBOX", "1") not in ("0", "false", "no"),
+            auto_block_after=int(os.environ.get("TECHNOCORE_AUTO_BLOCK_AFTER", "3")),
             think_seconds=float(os.environ.get("TECHNOCORE_THINK_SECONDS", "30")),
             max_replies_per_round=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_ROUND", "2")),
         )

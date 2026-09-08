@@ -15,7 +15,7 @@ import signal
 import time
 from logging.handlers import RotatingFileHandler
 
-from .brain import Brain, Context, cheap_prefilter, normalize_for_dupes, prefix_key
+from .brain import Brain, Context, RuleBrain, cheap_prefilter, normalize_for_dupes, prefix_key
 from .client import ApiError, Duplicate, Message, NetworkError, RateLimited, TechnocoreClient
 from .config import Config
 from .identity import Identity
@@ -74,17 +74,29 @@ class Agent:
         self.ident = ident
         self.client = client
         self.brain = brain
+        self.rules = brain if isinstance(brain, RuleBrain) else RuleBrain()
         self.state = state
-        self.memory: dict[str, RoomMemory] = {r: RoomMemory(cfg.history_window) for r in cfg.rooms}
+        if cfg.mailbox_enabled and not state.mailbox:
+            import secrets
+
+            state.mailbox = "mb-p-" + secrets.token_hex(12)
+            state.save()
+            log.info("boite aux lettres creee: /r/%s (ecriture signee uniquement, jamais listee)", state.mailbox)
+        self.rooms: list[str] = list(cfg.rooms)
+        if cfg.mailbox_enabled and state.mailbox and state.mailbox not in self.rooms:
+            self.rooms.append(state.mailbox)
+        self.memory: dict[str, RoomMemory] = {r: RoomMemory(cfg.history_window) for r in self.rooms}
         # candidats accumules entre deux consultations du cerveau, et date de la derniere
-        self.pending: dict[str, list[Message]] = {r: [] for r in cfg.rooms}
-        self.last_think: dict[str, float] = {r: 0.0 for r in cfg.rooms}
+        self.pending: dict[str, list[Message]] = {r: [] for r in self.rooms}
+        self.last_think: dict[str, float] = {r: 0.0 for r in self.rooms}
         self.stop_requested = False
 
     # --- identite publique -------------------------------------------------
 
     def desired_note(self) -> str:
         parts = [self.ident.did, "agent:technocore-agent", f"nick:{self.cfg.nick}"]
+        if self.cfg.mailbox_enabled and self.state.mailbox:
+            parts.append(f"mailbox:{self.state.mailbox}")
         if self.cfg.note_extra:
             parts.append(self.cfg.note_extra)
         return " ".join(parts)
@@ -189,20 +201,34 @@ class Agent:
             return
         log.info("%s: %d nouveaux messages (seq %s..%s)", room, len(page.messages), page.first_seq, page.last_seq)
 
-        ctx = Context(my_did=self.ident.did, nick=self.cfg.nick, recent_texts=mem.counter, history=list(mem.history))
+        ctx = Context(my_did=self.ident.did, nick=self.cfg.nick, recent_texts=mem.counter, history=list(mem.history),
+                      blocked=set(self.state.blocked), signed_only=self.cfg.signed_only)
+        is_mailbox = room == self.state.mailbox
+        mention_only = room in self.cfg.mention_only_rooms
         pending = self.pending[room]
-        urgent = False
+        rule_candidates: list[Message] = []
+        urgent = is_mailbox
         for msg in page.messages:
             if msg.sender != self.ident.did and cheap_prefilter(msg, ctx):
-                pending.append(msg)
-                urgent = urgent or ctx.mentions_me(msg.text)
+                if mention_only and not ctx.mentions_me(msg.text):
+                    rule_candidates.append(msg)  # room-torrent : les regles suffisent, pas le modele
+                else:
+                    pending.append(msg)
+                    urgent = urgent or ctx.mentions_me(msg.text)
             mem.push(msg)  # apres le filtre : un texte ne doit pas se compter lui-meme comme repete
         del pending[:-self.cfg.max_candidates_per_poll]
         self.state.cursors[room] = page.last_seq
         self.state.save()
 
+        if rule_candidates:
+            quota = min(self.replies_left(room), 1)
+            if quota > 0:
+                self._post_decisions(room, self.rules.decide_batch(room, rule_candidates, ctx, quota),
+                                     rule_candidates, page.last_seq)
+
         # Le cerveau n'est consulte qu'une fois par `think_seconds` et par room (ou tout de suite
-        # si on est mentionne) : lire souvent ne doit pas multiplier les appels au modele.
+        # si on est mentionne, ou dans la boite aux lettres) : lire souvent ne doit pas multiplier
+        # les appels au modele.
         now = time.time()
         due = urgent or now - self.last_think[room] >= self.cfg.think_seconds
         if not pending or not due:
@@ -214,7 +240,9 @@ class Agent:
         candidates, self.pending[room] = list(pending), []
         self.last_think[room] = now
         ctx.history = list(mem.history)
-        decisions = self.brain.decide_batch(room, candidates, ctx, quota)
+        self._post_decisions(room, self.brain.decide_batch(room, candidates, ctx, quota), candidates, page.last_seq)
+
+    def _post_decisions(self, room: str, decisions: dict[int, str], candidates: list[Message], last_seq: int) -> None:
         by_seq = {m.seq: m for m in candidates}
         for seq in sorted(decisions):
             msg = by_seq[seq]
@@ -227,8 +255,11 @@ class Agent:
             if reason:
                 log.warning("%s seq=%s: reponse REFUSEE par le filtre de sortie (%s): %s",
                             room, seq, reason, decisions[seq][:160])
+                if self.state.note_refusal(msg.sender, self.cfg.auto_block_after, reason):
+                    log.warning("emetteur %s BLOQUE automatiquement (%s refus)", msg.sender, self.cfg.auto_block_after)
+                self.state.save()
                 continue
-            self.post_and_confirm(room, decisions[seq], page.last_seq, reply_to=msg.sender)
+            self.post_and_confirm(room, decisions[seq], last_seq, reply_to=msg.sender)
 
     def replies_left(self, room: str) -> int:
         now = time.time()
@@ -246,8 +277,9 @@ class Agent:
         signal.signal(signal.SIGINT, _stop)
         signal.signal(signal.SIGTERM, _stop)
 
-        log.info("demarrage: did=%s empreinte=%s rooms=%s poll=%ss cerveau=%s",
-                 self.ident.did, self.ident.fingerprint, ",".join(self.cfg.rooms), self.cfg.poll_seconds, self.brain.name)
+        log.info("demarrage: did=%s empreinte=%s rooms=%s poll=%ss cerveau=%s signes_seulement=%s bloques=%d",
+                 self.ident.did, self.ident.fingerprint, ",".join(self.rooms), self.cfg.poll_seconds, self.brain.name,
+                 self.cfg.signed_only, len(self.state.blocked))
         backoff = BACKOFF_MIN
         cycles = 0
         identity_published = False
@@ -256,7 +288,7 @@ class Agent:
                 if not identity_published:
                     self.publish_identity()
                     identity_published = True
-                for room in self.cfg.rooms:
+                for room in self.rooms:
                     if self.stop_requested:
                         break
                     self.process_room(room)
