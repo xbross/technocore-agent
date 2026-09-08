@@ -201,7 +201,7 @@ class TechnocoreClient:
         check_name(ns, "namespace")
         check_name(key, "cle")
         try:
-            body = self._get(f"/kv/{ns}/{key}").text
+            body = self._get(f"/kv/{ns}/{key}", {"n": int(time.time() * 1000)}).text
         except ApiError as e:
             if e.status == 404:
                 return None

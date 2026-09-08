@@ -346,18 +346,40 @@ class ClaudeCliBrain(Brain):
     name = "claude-cli"
 
     def __init__(self, binary: str = "claude", model: str = "haiku", timeout: float = 180.0,
-                 fallback: Brain | None = None, cwd: str | None = None):
+                 fallback: Brain | None = None, cwd: str | None = None,
+                 max_calls_per_hour: int = 60, failure_pause: float = 300.0):
         self.binary = binary
         self.model = model
         self.timeout = timeout
         self.fallback = fallback or RuleBrain()
         self.cwd = cwd
+        # Plafond de depense : au plus `max_calls_per_hour` appels au modele, quel que soit le
+        # volume des rooms ; apres un echec, pause de `failure_pause` secondes (regles en relais).
+        self.max_calls_per_hour = max_calls_per_hour
+        self.failure_pause = failure_pause
+        self._calls: collections.deque[float] = collections.deque()
+        self._paused_until = 0.0
+        self._budget_warned = False
+
+    def _budget_available(self, now: float) -> bool:
+        while self._calls and now - self._calls[0] > 3600:
+            self._calls.popleft()
+        if now < self._paused_until:
+            return False
+        if len(self._calls) >= self.max_calls_per_hour:
+            if not self._budget_warned:
+                log.warning("claude-cli: plafond de %d appels/heure atteint — regles en relais jusqu'a liberation",
+                            self.max_calls_per_hour)
+                self._budget_warned = True
+            return False
+        self._budget_warned = False
+        return True
 
     def _prompt(self, room: str, candidates: list[Message], ctx: Context, max_replies: int) -> str:
         history = "\n".join(
             f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:200]}" for m in ctx.history[-10:]
         )
-        lines = "\n".join(f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:500]}" for m in candidates)
+        lines = "\n".join(f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:300]}" for m in candidates)
         return (
             f"Room: {room}. Your DID: {ctx.my_did} (short handle {short_handle(ctx.my_did)}), nick: {ctx.nick}.\n"
             f"Maximum replies this round: {max_replies}.\n"
@@ -407,13 +429,20 @@ class ClaudeCliBrain(Brain):
         return self.decide_batch(room, [msg], ctx, 1).get(msg.seq)
 
     def decide_batch(self, room: str, candidates: list[Message], ctx: Context, max_replies: int) -> dict[int, str]:
+        import time
+
         candidates = [m for m in candidates if cheap_prefilter(m, ctx)]
         if not candidates or max_replies <= 0:
             return {}
+        now = time.time()
+        if not self._budget_available(now):
+            return self.fallback.decide_batch(room, candidates, ctx, max_replies)
+        self._calls.append(now)
         try:
             structured = self._run(BATCH_SYSTEM_PROMPT, self._prompt(room, candidates, ctx, max_replies))
         except ClaudeCliError as e:
-            log.error("claude-cli indisponible (%s) — repli sur les regles pour ce tour", e)
+            self._paused_until = time.time() + self.failure_pause
+            log.error("claude-cli indisponible (%s) — regles en relais pendant %.0fs", e, self.failure_pause)
             return self.fallback.decide_batch(room, candidates, ctx, max_replies)
         allowed = {m.seq for m in candidates}
         out: dict[int, str] = {}
@@ -444,6 +473,7 @@ def build_brain(model: str | None = None) -> Brain:
             model=model or "haiku",
             timeout=float(os.environ.get("TECHNOCORE_CLAUDE_TIMEOUT", "180")),
             cwd=os.environ.get("TECHNOCORE_HOME"),
+            max_calls_per_hour=int(os.environ.get("TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR", "60")),
         )
         log.info("cerveau: claude-cli (%s via %s) avec repli sur les regles", brain.model, brain.binary)
         return brain

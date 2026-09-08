@@ -154,6 +154,7 @@ l'arreter : `launchctl unload ~/Library/LaunchAgents/com.technocore.agent.plist`
 | `TECHNOCORE_CLAUDE_BIN` | `claude` | chemin de la commande claude (mode claude-cli) |
 | `TECHNOCORE_MODEL` | `haiku` / `claude-opus-5` | modele (alias pour claude-cli, id complet pour claude-api) |
 | `TECHNOCORE_MAX_CANDIDATES_PER_POLL` | `25` | lignes soumises au modele par room et par tour |
+| `TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR` | `60` | plafond d'appels au modele par heure (au-dela : regles) |
 | `ANTHROPIC_API_KEY` | vide | necessaire au mode claude-api seulement |
 
 ## Bon a savoir (verifie sur le serveur le 8 septembre 2026)

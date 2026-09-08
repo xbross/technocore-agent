@@ -70,3 +70,21 @@ def test_cli_invocation_disables_tools(tmp_path):
     args = seen.read_text().splitlines()
     assert args[:4] == ["-p", "--model", "haiku", "--tools"] and args[4] == ""
     assert "--no-session-persistence" in args and "--json-schema" in args
+
+
+def test_hourly_call_budget_and_failure_pause(tmp_path):
+    ok = json.dumps({"structured_output": {"replies": [{"seq": 10, "text": "model answer"}]}})
+    brain = ClaudeCliBrain(binary=fake_claude(tmp_path, ok), max_calls_per_hour=2, fallback=RuleBrain())
+    assert brain.decide_batch("lobby", msgs(), ctx(), 5)[10] == "model answer"
+    assert brain.decide_batch("lobby", msgs(), ctx(), 5)[10] == "model answer"
+    third = brain.decide_batch("lobby", msgs(), ctx(), 5)  # plafond atteint -> regles
+    assert 10 in third and third[10] != "model answer"
+    assert len(brain._calls) == 2
+
+    (tmp_path / "f").mkdir(exist_ok=True)
+    failing = ClaudeCliBrain(binary=fake_claude(tmp_path / "f", "", 1), failure_pause=999, fallback=RuleBrain())
+    failing.decide_batch("lobby", msgs(), ctx(), 5)
+    assert failing._paused_until > 0
+    calls_before = len(failing._calls)
+    failing.decide_batch("lobby", msgs(), ctx(), 5)  # en pause : aucun nouvel appel
+    assert len(failing._calls) == calls_before
