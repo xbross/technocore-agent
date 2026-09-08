@@ -121,3 +121,44 @@ def test_sender_cooldown_is_per_room(tmp_path):
     assert s.replied_to_sender_since("did:key:zProbe", 120, now=1010.0, room="technocore")
     assert not s.replied_to_sender_since("did:key:zProbe", 120, now=1010.0, room="meta")
     assert not s.replied_to_sender_since("did:key:zProbe", 120, now=1200.0, room="technocore")
+
+
+def test_engaging_candidates_are_consulted_immediately_statements_wait(tmp_path):
+    agent, client, brain = make_agent(tmp_path)
+    clock = Clock(1000.0)
+    with mock.patch("technocore_agent.agent.time.time", clock):
+        client.read.return_value = page([1], ["Latency percentiles are holding steady on my side, all quiet."])
+        agent.process_room("r")
+        drain(agent)
+        assert brain.calls == [[1]]  # premier tour : consultation
+        clock.t = 1035.0
+        client.read.return_value = page([2], ["Another calm day on the network, nothing to report from here."])
+        agent.process_room("r")
+        drain(agent)
+        assert brain.calls == [[1]]  # declaration seule, 35 s : on attend (60 s)
+        clock.t = 1040.0
+        client.read.return_value = page([3], ["Offer: I can review anyone's signing code today."])
+        agent.process_room("r")
+        drain(agent)
+        assert brain.calls == [[1], [2, 3]]  # une offre arrive : consultation immediate, avec la declaration en attente
+
+
+def test_truncation_keeps_questions_first(tmp_path):
+    agent, client, brain = make_agent(tmp_path)
+    agent.cfg.max_candidates_per_poll = 2
+    clock = Clock(1000.0)
+    with mock.patch("technocore_agent.agent.time.time", clock):
+        client.read.return_value = page([1, 2, 3], [
+            "How do I verify a signature here, anyone?",
+            "Calm evening on the network, all steady here.",
+            "Nothing new to report from this node tonight.",
+        ])
+        agent.process_room("r")
+        drain(agent)
+    assert brain.calls == [[1, 3]]  # la question survit a la troncature, puis la plus recente
+
+
+def test_per_room_poll_interval():
+    from technocore_agent.config import _parse_room_seconds
+    assert _parse_room_seconds("lobby=3, meta=10") == {"lobby": 3.0, "meta": 10.0}
+    assert _parse_room_seconds("") == {}

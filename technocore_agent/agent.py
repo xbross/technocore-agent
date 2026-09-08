@@ -16,7 +16,7 @@ import signal
 import time
 from logging.handlers import RotatingFileHandler
 
-from .brain import Brain, Context, RuleBrain, cheap_prefilter, normalize_for_dupes, prefix_key
+from .brain import Brain, Context, RuleBrain, cheap_prefilter, is_engaging, normalize_for_dupes, prefix_key
 from .client import ApiError, Duplicate, Message, NetworkError, RateLimited, TechnocoreClient
 from .config import Config
 from .identity import Identity
@@ -94,6 +94,8 @@ class Agent:
         # les lectures continuent pendant un appel long. Les envois restent dans le fil principal.
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(self.rooms), thread_name_prefix="think")
         self.inflight: dict[str, tuple[concurrent.futures.Future, list[Message]]] = {}
+        self.next_read: dict[str, float] = {r: 0.0 for r in self.rooms}  # prochaine lecture par room
+        self.last_report = time.time()
         self.stop_requested = False
 
     # --- identite publique -------------------------------------------------
@@ -219,9 +221,13 @@ class Agent:
                     rule_candidates.append(msg)  # room-torrent : les regles suffisent, pas le modele
                 else:
                     pending.append(msg)
-                    urgent = urgent or ctx.mentions_me(msg.text)
+                    # question, offre ou mention : on ne fait pas attendre (les sondes en font partie)
+                    urgent = urgent or is_engaging(msg.text, ctx)
             mem.push(msg)  # apres le filtre : un texte ne doit pas se compter lui-meme comme repete
-        del pending[:-self.cfg.max_candidates_per_poll]
+        if len(pending) > self.cfg.max_candidates_per_poll:
+            # troncature : garder d'abord les questions/offres/mentions, puis les plus recentes
+            keep = sorted(pending, key=lambda m: (not is_engaging(m.text, ctx), -m.seq))[: self.cfg.max_candidates_per_poll]
+            pending[:] = sorted(keep, key=lambda m: m.seq)
         self.state.cursors[room] = page.last_seq
         self.state.save()
 
@@ -236,7 +242,9 @@ class Agent:
         # les appels au modele.
         self.collect_decisions(room, page.last_seq)
         now = time.time()
-        due = urgent or now - self.last_think[room] >= self.cfg.think_seconds
+        engaging = any(is_engaging(m.text, ctx) for m in pending)
+        wait = self.cfg.think_seconds if engaging else self.cfg.statement_think_seconds
+        due = urgent or now - self.last_think[room] >= wait
         if not pending or not due or room in self.inflight:
             return
         quota = min(self.replies_left(room), self.cfg.max_replies_per_round)
@@ -318,16 +326,23 @@ class Agent:
                 if not identity_published:
                     self.publish_identity()
                     identity_published = True
+                now = time.time()
                 for room in self.rooms:
                     if self.stop_requested:
                         break
+                    if now < self.next_read[room]:
+                        continue
                     self.process_room(room)
+                    self.next_read[room] = time.time() + self.cfg.room_poll_seconds.get(room, self.cfg.poll_seconds)
+                self.hourly_report()
                 backoff = BACKOFF_MIN
                 cycles += 1
                 if max_cycles is not None and cycles >= max_cycles:
                     log.info("max_cycles=%s atteint, arret", max_cycles)
                     break
-                self._sleep(self.cfg.poll_seconds)
+                # dormir jusqu'a la prochaine lecture due, au plus l'intervalle le plus court
+                shortest = min([self.cfg.poll_seconds] + list(self.cfg.room_poll_seconds.values()))
+                self._sleep(max(0.5, min(shortest, min(self.next_read.values()) - time.time())))
             except RateLimited as e:
                 log.warning("429: attente %.0fs demandee par le serveur (%s)", e.retry_after, e.body.strip()[:100])
                 self._sleep(e.retry_after)
@@ -346,6 +361,22 @@ class Agent:
         self.wait_for_thinking(timeout=60)
         self.state.save()
         log.info("arret: etat sauvegarde dans %s", self.state.path)
+
+    def hourly_report(self) -> None:
+        """Une ligne de bilan par heure dans le journal, pour voir venir les limites d'usage."""
+        if time.time() - self.last_report < 3600:
+            return
+        self.last_report = time.time()
+        try:
+            from .stats import compute
+
+            c = compute(self.cfg.log_path, 1.0)
+            log.info("BILAN 1h: appels_modele=%d tokens_in=%d tokens_out=%d reponses=%d refus_filtre=%d pauses_modele=%d "
+                     "plafond=%d quota_epuise=%d erreurs=%d", c["appels_modele"], c["tokens_in"], c["tokens_out"],
+                     c["reponses_envoyees"], c["refus_filtre"], c["pauses_modele"], c["plafond_modele"],
+                     c["quota_reponses_epuise"], c["erreurs"])
+        except OSError as e:
+            log.warning("bilan horaire impossible: %s", e)
 
     def _sleep(self, seconds: float) -> None:
         end = time.monotonic() + seconds

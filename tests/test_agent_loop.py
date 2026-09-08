@@ -53,25 +53,30 @@ class Clock:
         return self.t
 
 
-def test_candidates_accumulate_until_think_interval(tmp_path):
+def test_statements_accumulate_until_think_interval(tmp_path):
     agent, client, brain = make_agent(tmp_path)
     clock = Clock(1000.0)
     with mock.patch("technocore_agent.agent.time.time", clock):
-        client.read.return_value = page([1, 2], ["How do I sign a message here?", "Agent heartbeat online."])
+        client.read.return_value = page([1, 2], ["Calm evening on the network, all steady here tonight.", "Agent heartbeat online."])
         agent.process_room("r")
         drain(agent)
         assert brain.calls == [[1]]  # premier appel (last_think=0)
         clock.t = 1010.0
-        client.read.return_value = page([3], ["Anyone know which room is active?"])
+        client.read.return_value = page([3], ["Nothing new to report from this node this evening."])
         agent.process_room("r")
         drain(agent)
-        assert brain.calls == [[1]]  # 10 s plus tard : accumule, pas d'appel
+        assert brain.calls == [[1]]  # declaration, 10 s plus tard : accumule, pas d'appel
         clock.t = 1040.0
-        client.read.return_value = page([4], ["What does the nonce do?"])
+        client.read.return_value = page([4], ["Still quiet here, the relay is doing its job as usual."])
         agent.process_room("r")
         drain(agent)
-        assert brain.calls == [[1], [3, 4]]  # 30 s ecoulees : un seul appel avec les deux
-    assert agent.state.cursors["r"] == 4
+        assert brain.calls == [[1]]  # 40 s : declarations seules, on attend 60 s
+        clock.t = 1065.0
+        client.read.return_value = page([5], ["Same picture on my side, nothing worth flagging tonight."])
+        agent.process_room("r")
+        drain(agent)
+        assert brain.calls == [[1], [3, 4, 5]]  # 65 s : un seul appel avec tout ce qui attendait
+    assert agent.state.cursors["r"] == 5
 
 
 def test_mention_triggers_immediately(tmp_path):

@@ -13,6 +13,18 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 
+def _parse_room_seconds(spec: str) -> dict:
+    """'lobby=3,meta=10' -> {'lobby': 3.0, 'meta': 10.0}. Une valeur invalide leve ValueError (visible)."""
+    out = {}
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        room, _, secs = item.partition("=")
+        out[room.strip()] = float(secs)
+    return out
+
+
 def load_dotenv(path: Path) -> None:
     if not path.exists():
         return
@@ -40,6 +52,8 @@ class Config:
     history_window: int = 600  # textes recents gardes par room pour le filtre anti-boilerplate
     max_candidates_per_poll: int = 25  # lignes (les plus recentes) soumises au cerveau par room et par appel
     think_seconds: float = 30.0  # delai minimal entre deux appels au cerveau pour une meme room
+    statement_think_seconds: float = 60.0  # idem quand aucun candidat n'est une question/offre/mention
+    room_poll_seconds: dict = field(default_factory=dict)  # intervalle de lecture par room, ex. {"lobby": 3}
     max_replies_per_round: int = 2  # reponses max par room et par consultation du cerveau
     signed_only: bool = True  # ignorer les emetteurs non signes (un pseudo est forgeable, un DID non)
     mention_only_rooms: tuple = ("lobby",)  # rooms ou le modele n'est consulte que si on est mentionne
@@ -81,5 +95,7 @@ class Config:
             mailbox_enabled=os.environ.get("TECHNOCORE_MAILBOX", "1") not in ("0", "false", "no"),
             auto_block_after=int(os.environ.get("TECHNOCORE_AUTO_BLOCK_AFTER", "3")),
             think_seconds=float(os.environ.get("TECHNOCORE_THINK_SECONDS", "30")),
+            statement_think_seconds=float(os.environ.get("TECHNOCORE_STATEMENT_THINK_SECONDS", "60")),
+            room_poll_seconds=_parse_room_seconds(os.environ.get("TECHNOCORE_ROOM_POLL_SECONDS", "lobby=3")),
             max_replies_per_round=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_ROUND", "2")),
         )

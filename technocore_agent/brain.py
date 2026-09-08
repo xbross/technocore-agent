@@ -43,8 +43,9 @@ QUESTION_CUES = re.compile(
 # Message conversationnel qui s'adresse a quelqu'un ou propose quelque chose.
 # Message qui s'adresse a la room et attend une reaction (offre, demande, salut court).
 CONVERSATION_CUES = re.compile(
-    r"\b(offer(ing)?:|i (can )?offer|looking for|need help|anyone (here|know|have|want|got)|help me|thoughts\??|"
-    r"any (thoughts|ideas|advice)|proposal:?|collab|partner up|bounty:?)\b",
+    r"\b(offer(ing)?|proposal|bounty|request):"  # 'Offer: ...' (deux-points, pas de frontiere de mot apres)
+    r"|\b(i (can )?offer|looking for|need help|anyone (here|know|have|want|got)|help me|thoughts\??|"
+    r"any (thoughts|ideas|advice)|collab|partner up)\b",
     re.IGNORECASE,
 )
 GREETING_CUES = re.compile(r"^(hello|hi|hey|gm|good (morning|evening)|new here|just joined)\b", re.IGNORECASE)
@@ -109,6 +110,11 @@ class Context:
 
 
 MIN_LEN = 12
+
+
+def is_engaging(text: str, ctx: Context) -> bool:
+    """Question, offre ou mention : merite une consultation immediate et une place prioritaire."""
+    return bool(ctx.mentions_me(text) or QUESTION_CUES.search(text) or CONVERSATION_CUES.search(text))
 
 
 def cheap_prefilter(msg: Message, ctx: Context) -> bool:
@@ -262,7 +268,7 @@ class ClaudeBrain(Brain):
 
     def _prompt(self, room: str, msg: Message, ctx: Context) -> str:
         history = "\n".join(
-            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:300]}" for m in ctx.history[-5:]
+            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:300]}" for m in ctx.history[-3:]
         )
         return (
             f"Room: {room}. Your DID: {ctx.my_did} (short handle {short_handle(ctx.my_did)}), nick: {ctx.nick}.\n"
@@ -328,7 +334,9 @@ number of replies given.
 The default answer is NO reply: almost every line in these rooms is written by an automated agent talking to
 itself or to nobody. An empty list is the normal outcome of a round. Reply only when a line clearly asks something
 that can be answered, makes a concrete offer or request, or is addressed to you. Skip slogans, status reports,
-agent-to-agent philosophizing, rhetorical questions, and anything that reads like a template. When in doubt, skip."""
+agent-to-agent philosophizing, rhetorical questions, and anything that reads like a template. When in doubt, skip.
+
+Output discipline: do not write any explanation, analysis or commentary. Produce only the structured result."""
 
 BATCH_SCHEMA = {
     "type": "object",
@@ -388,7 +396,7 @@ class ClaudeCliBrain(Brain):
 
     def _prompt(self, room: str, candidates: list[Message], ctx: Context, max_replies: int) -> str:
         history = "\n".join(
-            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:200]}" for m in ctx.history[-5:]
+            f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:200]}" for m in ctx.history[-3:]
         )
         lines = "\n".join(f"[{m.seq}] <{short_handle(m.sender)}> {to_ascii(m.text)[:300]}" for m in candidates)
         return (
