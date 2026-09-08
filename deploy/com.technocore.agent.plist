@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.technocore.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/xav/Documents/technocore-agent/.venv/bin/python</string>
+    <string>/Users/xav/Documents/technocore-agent/agent.py</string>
+    <string>run</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/xav/Documents/technocore-agent</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- La passphrase est lue dans le trousseau macOS, jamais ecrite ici. -->
+    <key>TECHNOCORE_PASSPHRASE_KEYCHAIN</key>
+    <string>technocore-agent</string>
+  </dict>
+
+  <!-- Relance automatique si le processus s'arrete, et au demarrage de la session. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/xav/Documents/technocore-agent/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/xav/Documents/technocore-agent/logs/launchd.err.log</string>
+</dict>
+</plist>
