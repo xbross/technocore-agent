@@ -21,7 +21,10 @@ WALLET_RE = re.compile(
 )
 FORBIDDEN_WORDS = [
     "airdrop", "snapshot", "send", "transfer", "wallet", "deposit", "withdraw", "wire",
-    "invest", "buy", "sell", "trade", "swap", "stake", "claim your", "claim now", "claim free", "claim rewards?",
+    # 'trade', 'swap', 'stake' sont du vocabulaire courant du protocole (offres tclk, staking) :
+    # seuls les usages incitatifs sont refuses, pas le mot seul.
+    "invest", "buy", "sell", "trade with me", "swap now", "stake now", "claim your", "claim now", "claim free",
+    "claim rewards?",
     "presale", "whitelist",
     "guaranteed", "profit", "seed phrase", "private key", "passphrase", "password", "api key",
     "secret", "credential", "postage", "fee", "payment", "pay", "usdt", "usdc", "eth", "btc", "sol",
