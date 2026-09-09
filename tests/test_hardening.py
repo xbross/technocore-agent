@@ -162,3 +162,18 @@ def test_per_room_poll_interval():
     from technocore_agent.config import _parse_room_seconds
     assert _parse_room_seconds("lobby=3, meta=10") == {"lobby": 3.0, "meta": 10.0}
     assert _parse_room_seconds("") == {}
+
+
+def test_reply_reserve_keeps_room_for_engaging_messages(tmp_path):
+    agent, client, brain = make_agent(tmp_path)
+    agent.cfg.max_replies_per_hour, agent.cfg.reply_reserve = 10, 4
+    agent.cfg.max_replies_per_room_per_hour = 100
+    for i in range(6):
+        agent.state.record_reply("other", f"did:key:z{i}")
+    statement = Message(seq=1, ts="", sender="did:key:zS", text="Calm evening on the network, all steady here.", nonce=1, sig="s")
+    question = Message(seq=2, ts="", sender="did:key:zQ", text="How do I verify a signature here?", nonce=1, sig="s")
+    assert agent.may_reply("r", statement) == "quota reserve aux questions/offres/mentions"
+    assert agent.may_reply("r", question) is None
+    for i in range(4):
+        agent.state.record_reply("other", f"did:key:zz{i}")
+    assert agent.may_reply("r", question) == "quota global/heure atteint"

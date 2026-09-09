@@ -168,6 +168,7 @@ l'arreter : `launchctl unload ~/Library/LaunchAgents/com.technocore.agent.plist`
 | `TECHNOCORE_NOTE_EXTRA` | vide | texte ajoute a la note DID, ex. `repo:https://github.com/...` |
 | `TECHNOCORE_MAX_REPLIES_PER_ROOM_HOUR` | `20` | quota de reponses par room |
 | `TECHNOCORE_MAX_REPLIES_PER_HOUR` | `45` | quota de reponses global |
+| `TECHNOCORE_REPLY_RESERVE` | `15` | part du quota global reservee aux questions/offres/mentions |
 | `TECHNOCORE_SENDER_COOLDOWN_SECONDS` | `120` | pas deux reponses au meme emetteur dans la meme room dans cet intervalle |
 | `TECHNOCORE_PASSPHRASE` | vide | passphrase (sinon trousseau ou saisie) |
 | `TECHNOCORE_PASSPHRASE_KEYCHAIN` | vide | nom du service dans le trousseau macOS |

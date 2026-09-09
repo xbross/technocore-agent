@@ -139,12 +139,19 @@ class Agent:
     # --- garde-fous --------------------------------------------------------
 
     def may_reply(self, room: str, msg: Message) -> str | None:
-        """None si autorise, sinon la raison du refus (pour le journal)."""
+        """None si autorise, sinon la raison du refus (pour le journal).
+
+        Une part du quota global (`reply_reserve`) est reservee aux messages engageants
+        (question, offre, mention) : le bavardage de la nuit ne peut pas tout consommer."""
         st, cfg = self.state, self.cfg
         if st.replies_in_room_since(room, 3600) >= cfg.max_replies_per_room_per_hour:
             return "quota room/heure atteint"
-        if sum(1 for r in st.recent_replies if time.time() - r["at"] < 3600) >= cfg.max_replies_per_hour:
+        total_used = sum(1 for r in st.recent_replies if time.time() - r["at"] < 3600)
+        if total_used >= cfg.max_replies_per_hour:
             return "quota global/heure atteint"
+        ctx = Context(my_did=self.ident.did, nick=cfg.nick)
+        if not is_engaging(msg.text, ctx) and total_used >= cfg.max_replies_per_hour - cfg.reply_reserve:
+            return "quota reserve aux questions/offres/mentions"
         if st.replied_to_sender_since(msg.sender, cfg.sender_cooldown_seconds, room=room):
             return "deja repondu a cet emetteur dans cette room recemment"
         return None

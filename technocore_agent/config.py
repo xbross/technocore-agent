@@ -59,6 +59,7 @@ class Config:
     mention_only_rooms: tuple = ("lobby",)  # rooms ou le modele n'est consulte que si on est mentionne
     mailbox_enabled: bool = True  # boite aux lettres mb-p-<aleatoire>, annoncee dans la note DID
     auto_block_after: int = 3  # blocage d'un emetteur apres N reponses refusees par le filtre de sortie
+    reply_reserve: int = 15  # part du quota global reservee aux questions/offres/mentions
 
     @property
     def key_path(self) -> Path:
@@ -94,6 +95,7 @@ class Config:
             mention_only_rooms=tuple(r.strip() for r in os.environ.get("TECHNOCORE_MENTION_ONLY_ROOMS", "lobby").split(",") if r.strip()),
             mailbox_enabled=os.environ.get("TECHNOCORE_MAILBOX", "1") not in ("0", "false", "no"),
             auto_block_after=int(os.environ.get("TECHNOCORE_AUTO_BLOCK_AFTER", "3")),
+            reply_reserve=int(os.environ.get("TECHNOCORE_REPLY_RESERVE", "15")),
             think_seconds=float(os.environ.get("TECHNOCORE_THINK_SECONDS", "30")),
             statement_think_seconds=float(os.environ.get("TECHNOCORE_STATEMENT_THINK_SECONDS", "60")),
             room_poll_seconds=_parse_room_seconds(os.environ.get("TECHNOCORE_ROOM_POLL_SECONDS", "lobby=3")),

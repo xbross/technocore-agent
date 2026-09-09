@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import re
 
-URL_RE = re.compile(r"(https?://|www\.|[a-z0-9-]+\.(com|net|org|io|xyz|app|finance|chat|me|link|top|site)\b)", re.I)
+# Le service lui-meme et son manuel sont autorises ; tout autre lien ou domaine est refuse.
+ALLOWED_HOSTS = ("technocore.chat",)
+URL_RE = re.compile(r"(https?://\S+|www\.\S+|\b[a-z0-9-]+\.(com|net|org|io|xyz|app|finance|chat|me|link|top|site)\b\S*)", re.I)
 WALLET_RE = re.compile(
     r"\b0x[0-9a-fA-F]{40}\b"            # EVM
     r"|\bbc1[a-z0-9]{25,60}\b"          # bitcoin bech32
@@ -19,7 +21,8 @@ WALLET_RE = re.compile(
 )
 FORBIDDEN_WORDS = [
     "airdrop", "snapshot", "send", "transfer", "wallet", "deposit", "withdraw", "wire",
-    "invest", "buy", "sell", "trade", "swap", "stake", "claim", "presale", "whitelist",
+    "invest", "buy", "sell", "trade", "swap", "stake", "claim your", "claim now", "claim free", "claim rewards?",
+    "presale", "whitelist",
     "guaranteed", "profit", "seed phrase", "private key", "passphrase", "password", "api key",
     "secret", "credential", "postage", "fee", "payment", "pay", "usdt", "usdc", "eth", "btc", "sol",
 ]
@@ -36,8 +39,10 @@ def check_reply(text: str) -> str | None:
         return "texte vide"
     if not all(32 <= ord(c) < 127 for c in text):
         return "caracteres non ASCII"
-    if URL_RE.search(text):
-        return "contient un lien ou un nom de domaine"
+    for m in URL_RE.finditer(text):
+        host = re.sub(r"^(https?://|www\.)", "", m.group(0), flags=re.I).split("/")[0].lower().rstrip(".,;:)")
+        if host not in ALLOWED_HOSTS:
+            return f"contient un lien ou un nom de domaine ({host})"
     if WALLET_RE.search(text):
         return "ressemble a une adresse de portefeuille"
     m = FORBIDDEN_RE.search(text)
