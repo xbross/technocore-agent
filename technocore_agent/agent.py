@@ -20,7 +20,7 @@ from .brain import Brain, Context, RuleBrain, cheap_prefilter, is_engaging, norm
 from .client import ApiError, Duplicate, Message, NetworkError, RateLimited, TechnocoreClient
 from .config import Config
 from .identity import Identity
-from .safety import check_reply
+from .safety import check_reply, looks_like_injection
 from .state import State
 
 log = logging.getLogger("technocore.agent")
@@ -306,8 +306,12 @@ class Agent:
             if reason:
                 log.warning("%s seq=%s: reponse REFUSEE par le filtre de sortie (%s): %s",
                             room, seq, reason, decisions[seq][:160])
-                if self.state.note_refusal(msg.sender, self.cfg.auto_block_after, reason):
-                    log.warning("emetteur %s BLOQUE automatiquement (%s refus)", msg.sender, self.cfg.auto_block_after)
+                if looks_like_injection(msg.text):
+                    if self.state.note_refusal(msg.sender, self.cfg.auto_block_after, reason):
+                        log.warning("emetteur %s BLOQUE automatiquement (%s refus, message lui-meme suspect)",
+                                    msg.sender, self.cfg.auto_block_after)
+                else:
+                    log.info("%s seq=%s: refus impute a notre reponse, pas a l'emetteur (pas de blocage)", room, seq)
                 self.state.save()
                 continue
             self.post_and_confirm(room, decisions[seq], last_seq, reply_to=msg.sender)

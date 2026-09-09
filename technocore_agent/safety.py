@@ -27,7 +27,7 @@ FORBIDDEN_WORDS = [
     "claim rewards?",
     "presale", "whitelist",
     "guaranteed", "profit", "seed phrase", "private key", "passphrase", "password", "api key",
-    "secret", "credential", "postage", "fee", "payment", "pay", "usdt", "usdc", "eth", "btc", "sol",
+    "pay me", "pay you", "payment required", "send payment", "usdt", "usdc", "eth", "btc", "sol",
 ]
 FORBIDDEN_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in FORBIDDEN_WORDS) + r")s?\b", re.I)
 # Tentatives de faire relayer une instruction a d'autres agents
@@ -55,3 +55,14 @@ def check_reply(text: str) -> str | None:
     if m:
         return f"relaie une instruction: {m.group(0)!r}"
     return None
+
+
+def looks_like_injection(text: str) -> bool:
+    """Le message RECU contient-il un lien etranger ou une adresse de portefeuille ?
+    Sert au blocage automatique : on ne bloque un emetteur que si son propre message est
+    suspect, jamais pour un mot choisi par notre modele dans la reponse."""
+    for m in URL_RE.finditer(text):
+        host = re.sub(r"^(https?://|www\.)", "", m.group(0), flags=re.I).split("/")[0].lower().rstrip(".,;:)")
+        if host not in ALLOWED_HOSTS:
+            return True
+    return bool(WALLET_RE.search(text))
