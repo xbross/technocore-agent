@@ -102,7 +102,7 @@ def cmd_block(cfg: Config, args) -> int:
         else:
             print(f"debloque: {args.did}")
     state.save()
-    print(f"{len(state.blocked)} emetteur(s) bloque(s). Relancez le service pour appliquer.")
+    print(f"{len(state.blocked)} emetteur(s) bloque(s). Le service reecrit son etat en continu : arretez-le AVANT (launchctl unload ...) puis relancez-le apres.")
     return 0
 
 
