@@ -70,6 +70,17 @@ def test_cli_invocation_disables_tools(tmp_path):
     args = seen.read_text().splitlines()
     assert args[:4] == ["-p", "--model", "haiku", "--tools"] and args[4] == ""
     assert "--no-session-persistence" in args and "--json-schema" in args
+    assert args[args.index("--effort") + 1] == "low"
+
+
+def test_thinking_disabled_in_subprocess_env(tmp_path):
+    seen = tmp_path / "env.txt"
+    path = tmp_path / "claude"
+    reply = json.dumps({"structured_output": {"replies": []}})
+    path.write_text("#!/bin/sh\necho \"$MAX_THINKING_TOKENS\" > " + str(seen) + "\nprintf '%s' '" + reply + "'\n")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    ClaudeCliBrain(binary=str(path)).decide_batch("lobby", msgs(), ctx(), 3)
+    assert seen.read_text().strip() == "0"
 
 
 def test_hourly_call_budget_and_failure_pause(tmp_path):

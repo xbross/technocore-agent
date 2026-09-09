@@ -379,8 +379,13 @@ class ClaudeCliBrain(Brain):
 
     def __init__(self, binary: str = "claude", model: str = "haiku", timeout: float = 180.0,
                  fallback: Brain | None = None, cwd: str | None = None,
-                 max_calls_per_hour: int = 200, failure_pause: float = 300.0, debug_dir: str | None = None):
+                 max_calls_per_hour: int = 60, failure_pause: float = 300.0, debug_dir: str | None = None,
+                 effort: str | None = "low", max_thinking_tokens: int | None = 0):
         self.debug_dir = debug_dir  # si defini, le dernier resultat brut y est ecrit (last_claude_result.json)
+        # effort faible + reflexion etendue coupee : la tache (trier des lignes, ecrire une phrase)
+        # n'en a pas besoin, et les tokens sortants sont la ou part une grosse part du cout.
+        self.effort = effort
+        self.max_thinking_tokens = max_thinking_tokens
         self.binary = binary
         self.model = model
         self.timeout = timeout
@@ -429,9 +434,14 @@ class ClaudeCliBrain(Brain):
         cmd = [
             self.binary, "-p", "--model", self.model, "--tools", "", "--no-session-persistence",
             "--setting-sources", "", "--strict-mcp-config", "--output-format", "json",
-            "--json-schema", json.dumps(BATCH_SCHEMA), "--system-prompt", system, prompt,
+            "--json-schema", json.dumps(BATCH_SCHEMA), "--system-prompt", system,
         ]
+        if self.effort:
+            cmd += ["--effort", self.effort]
+        cmd.append(prompt)
         env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+        if self.max_thinking_tokens is not None:
+            env["MAX_THINKING_TOKENS"] = str(self.max_thinking_tokens)
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout,
                                   stdin=subprocess.DEVNULL, env=env, cwd=self.cwd, check=False)
@@ -513,8 +523,10 @@ def build_brain(model: str | None = None, debug_dir: str | None = None) -> Brain
             model=model or "haiku",
             timeout=float(os.environ.get("TECHNOCORE_CLAUDE_TIMEOUT", "180")),
             cwd=os.environ.get("TECHNOCORE_HOME"),
-            max_calls_per_hour=int(os.environ.get("TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR", "200")),
+            max_calls_per_hour=int(os.environ.get("TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR", "60")),
             debug_dir=debug_dir,
+            effort=os.environ.get("TECHNOCORE_CLAUDE_EFFORT", "low") or None,
+            max_thinking_tokens=int(os.environ.get("TECHNOCORE_CLAUDE_MAX_THINKING", "0")),
         )
         log.info("cerveau: claude-cli (%s via %s) avec repli sur les regles", brain.model, brain.binary)
         return brain

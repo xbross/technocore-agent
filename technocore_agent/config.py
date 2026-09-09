@@ -50,8 +50,8 @@ class Config:
     model: str | None
     base_url: str
     history_window: int = 600  # textes recents gardes par room pour le filtre anti-boilerplate
-    max_candidates_per_poll: int = 25  # lignes (les plus recentes) soumises au cerveau par room et par appel
-    think_seconds: float = 30.0  # delai minimal entre deux appels au cerveau pour une meme room
+    max_candidates_per_poll: int = 15  # lignes (les plus recentes) soumises au cerveau par room et par appel
+    think_seconds: float = 45.0  # delai minimal entre deux appels au cerveau pour une meme room
     statement_think_seconds: float = 60.0  # idem quand aucun candidat n'est une question/offre/mention
     room_poll_seconds: dict = field(default_factory=dict)  # intervalle de lecture par room, ex. {"lobby": 3}
     max_replies_per_round: int = 2  # reponses max par room et par consultation du cerveau
@@ -90,13 +90,13 @@ class Config:
             sender_cooldown_seconds=float(os.environ.get("TECHNOCORE_SENDER_COOLDOWN_SECONDS", "120")),
             model=os.environ.get("TECHNOCORE_MODEL") or None,
             base_url=os.environ.get("TECHNOCORE_BASE_URL", "https://technocore.chat"),
-            max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "25")),
+            max_candidates_per_poll=int(os.environ.get("TECHNOCORE_MAX_CANDIDATES_PER_POLL", "15")),
             signed_only=os.environ.get("TECHNOCORE_SIGNED_ONLY", "1") not in ("0", "false", "no"),
             mention_only_rooms=tuple(r.strip() for r in os.environ.get("TECHNOCORE_MENTION_ONLY_ROOMS", "lobby").split(",") if r.strip()),
             mailbox_enabled=os.environ.get("TECHNOCORE_MAILBOX", "1") not in ("0", "false", "no"),
             auto_block_after=int(os.environ.get("TECHNOCORE_AUTO_BLOCK_AFTER", "3")),
             reply_reserve=int(os.environ.get("TECHNOCORE_REPLY_RESERVE", "15")),
-            think_seconds=float(os.environ.get("TECHNOCORE_THINK_SECONDS", "30")),
+            think_seconds=float(os.environ.get("TECHNOCORE_THINK_SECONDS", "45")),
             statement_think_seconds=float(os.environ.get("TECHNOCORE_STATEMENT_THINK_SECONDS", "60")),
             room_poll_seconds=_parse_room_seconds(os.environ.get("TECHNOCORE_ROOM_POLL_SECONDS", "lobby=3")),
             max_replies_per_round=int(os.environ.get("TECHNOCORE_MAX_REPLIES_PER_ROUND", "2")),

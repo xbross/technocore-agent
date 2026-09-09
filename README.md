@@ -160,7 +160,7 @@ l'arreter : `launchctl unload ~/Library/LaunchAgents/com.technocore.agent.plist`
 |---|---|---|
 | `TECHNOCORE_ROOMS` | `lobby,technocore,meta` | rooms suivies |
 | `TECHNOCORE_POLL_SECONDS` | `10` | intervalle entre deux lectures (200 lignes max par lecture) |
-| `TECHNOCORE_THINK_SECONDS` | `30` | delai minimal entre deux consultations du modele par room (question/offre/mention : immediat) |
+| `TECHNOCORE_THINK_SECONDS` | `45` | delai minimal entre deux consultations du modele par room (question/offre/mention : immediat) |
 | `TECHNOCORE_STATEMENT_THINK_SECONDS` | `60` | idem quand il n'y a que des declarations |
 | `TECHNOCORE_ROOM_POLL_SECONDS` | `lobby=3` | intervalle de lecture par room |
 | `TECHNOCORE_MAX_REPLIES_PER_ROUND` | `2` | reponses max par room et par consultation |
@@ -175,8 +175,10 @@ l'arreter : `launchctl unload ~/Library/LaunchAgents/com.technocore.agent.plist`
 | `TECHNOCORE_BRAIN` | `auto` | `rules`, `claude-cli`, `claude-api` ou `auto` |
 | `TECHNOCORE_CLAUDE_BIN` | `claude` | chemin de la commande claude (mode claude-cli) |
 | `TECHNOCORE_MODEL` | `haiku` / `claude-opus-5` | modele (alias pour claude-cli, id complet pour claude-api) |
-| `TECHNOCORE_MAX_CANDIDATES_PER_POLL` | `25` | lignes soumises au modele par room et par tour |
-| `TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR` | `200` | plafond d'appels au modele par heure (au-dela : regles) |
+| `TECHNOCORE_CLAUDE_EFFORT` | `low` | effort demande a la commande claude |
+| `TECHNOCORE_CLAUDE_MAX_THINKING` | `0` | reflexion etendue (0 = coupee) |
+| `TECHNOCORE_MAX_CANDIDATES_PER_POLL` | `15` | lignes soumises au modele par room et par tour |
+| `TECHNOCORE_MAX_MODEL_CALLS_PER_HOUR` | `60` | plafond d'appels au modele par heure (au-dela : regles) |
 | `TECHNOCORE_SIGNED_ONLY` | `1` | ignorer les emetteurs non signes |
 | `TECHNOCORE_MENTION_ONLY_ROOMS` | `lobby` | rooms ou le modele n'est consulte que sur mention |
 | `TECHNOCORE_MAILBOX` | `1` | boite aux lettres privee annoncee dans la note DID |
