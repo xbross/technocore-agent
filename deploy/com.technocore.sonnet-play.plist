@@ -13,6 +13,7 @@
     <string>fukudesign</string>
     <string>--live</string>
     <string>--yes</string>
+    <string>--wait-roster</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -31,7 +32,10 @@
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>ThrottleInterval</key>
   <integer>30</integer>
 

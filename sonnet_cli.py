@@ -31,6 +31,7 @@ from pathlib import Path
 from technocore_agent import identity
 from technocore_agent.client import TechnocoreClient
 from technocore_agent.sonnet import lexicon, package, poem, register, team, writer
+from technocore_agent.sonnet.roster import roster_status, wait_for_roster
 from technocore_agent.sonnet.config import ConfigError, SonnetConfig
 from technocore_agent.sonnet.watch import SonnetWatcher
 
@@ -214,6 +215,19 @@ def cmd_poem_state(cfg, args) -> int:
     return 0
 
 
+def cmd_roster_status(cfg, args) -> int:
+    client = TechnocoreClient()
+    msgs, _ = _read_all(client, cfg.rooms["discovery"])
+    st = roster_status(msgs, cfg.rooms["discovery"], cfg.referee_did, args.game_id, cfg.did or "")
+    if args.json:
+        print(json.dumps(st))
+    else:
+        print(f"{st['game_id']}: liste seq {st['roster_seq']}, {len(st['signed'])}/{len(st['members'])} consentements acceptes, ready={st['ready']}")
+        for m in st["members"]:
+            print(f"  {'OK ' if m in st['signed'] else '.. '}{m}{'  <- nous' if m == cfg.did else ''}")
+    return 0
+
+
 def cmd_submit_prep(cfg, args) -> int:
     st, lex, _ = _state_for(cfg, TechnocoreClient(), args.game_id)
     _print_state(st)
@@ -254,6 +268,17 @@ def cmd_play(cfg, args) -> int:
     _setup_logging(cfg, logging.DEBUG if args.verbose else logging.INFO)
     ident = _identity(cfg)
     client = TechnocoreClient()
+    stop = threading.Event()
+    for s_ in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(s_, lambda *_: stop.set())
+    if args.wait_roster:
+        def status():
+            msgs, _ = _read_all(client, cfg.rooms["discovery"])
+            return roster_status(msgs, cfg.rooms["discovery"], cfg.referee_did, args.game_id, ident.did)
+        log.info("%s: attente du roster_ready de l'arbitre avant de jouer", args.game_id)
+        if wait_for_roster(status, poll_seconds=30, stop=stop) is None:
+            return 0
+        log.info("%s: roster pret, le jeu peut commencer", args.game_id)
     st, lex, prons = _state_for(cfg, client, args.game_id)
     _print_state(st)
     playable = lexicon.playable_words(lex, lexicon.did_alphabet(ident.did))
@@ -263,9 +288,6 @@ def cmd_play(cfg, args) -> int:
                       archive_dir=cfg.archive_dir, dry_run=not live,
                       max_words_per_poem=int(cfg.extra.get("brain", {}).get("max_words_per_poem", 60)),
                       official_validate=lambda word, did: validator.validate_word(word, did, lex))
-    stop = threading.Event()
-    for s_ in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(s_, lambda *_: stop.set())
     log.info("%s: mode %s, modele %s", args.game_id, "LIVE" if live else "DRY-RUN", "aucun" if args.no_model else cfg.model)
     w.run(st, stop=stop, max_steps=args.steps)
     _print_state(st)
@@ -368,12 +390,16 @@ def main(argv=None) -> int:
     p.add_argument("game_id")
     p = sub.add_parser("submit-prep")
     p.add_argument("game_id")
+    p = sub.add_parser("roster-status")
+    p.add_argument("game_id")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("play")
     p.add_argument("game_id")
     p.add_argument("--live", action="store_true", help="poster reellement (sinon dry-run)")
     p.add_argument("--yes", action="store_true")
     p.add_argument("--no-model", action="store_true", help="choix heuristique sans appel de modele")
     p.add_argument("--steps", type=int, default=None, help="nombre de lectures max (defaut: infini)")
+    p.add_argument("--wait-roster", action="store_true", help="attendre le recu roster_ready de l'arbitre avant de jouer")
     p.add_argument("-v", "--verbose", action="store_true")
     for name in ("team-request", "withdraw"):
         p = sub.add_parser(name)
@@ -397,6 +423,7 @@ def main(argv=None) -> int:
     handlers = {"alphabet": cmd_alphabet, "words": cmd_words, "roster": cmd_roster, "pitch": cmd_pitch,
                 "fetch-package": cmd_fetch, "verify-package": cmd_verify, "watch": cmd_watch,
                 "register": cmd_register, "poem-state": cmd_poem_state, "submit-prep": cmd_submit_prep,
+                "roster-status": cmd_roster_status,
                 "play": cmd_play, "team-request": cmd_team_request, "roster-sign": cmd_roster_sign,
                 "withdraw": cmd_withdraw, "say": cmd_say}
     try:
