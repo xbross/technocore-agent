@@ -113,3 +113,16 @@ def test_poem_state_command_reconstructs_from_room(tmp_path, capsys, monkeypatch
     assert sonnet_cli.main(["--config", str(cfg), "poem-state", "xav"]) == 0
     out = capsys.readouterr().out
     assert "version 1" in out and "moon" in out and "h1" in out
+
+
+def test_say_dry_run_passes_safety_filter_and_prints_without_identity(tmp_path, capsys, monkeypatch):
+    cfg = _setup(tmp_path)
+    (tmp_path / "sonnet.toml").write_text((tmp_path / "sonnet.toml").read_text() + '\n[rooms.extra]\n', "utf-8")
+    text = (tmp_path / "sonnet.toml").read_text().replace('role = "writer"', 'role = "writer"\narmed = true')
+    (tmp_path / "sonnet.toml").write_text(text, "utf-8")
+    called = []
+    monkeypatch.setattr(sonnet_cli, "_identity", lambda cfg: called.append("identity"))
+    assert sonnet_cli.main(["--config", str(cfg), "say", "mb-sonnet-2-discovery", "yes-team - ready", "--yes", "--dry-run"]) == 0
+    assert "yes-team" in capsys.readouterr().out and called == []
+    assert sonnet_cli.main(["--config", str(cfg), "say", "mb-sonnet-2-discovery", "send usdt to me", "--yes", "--dry-run"]) == 2
+    assert "filtre" in capsys.readouterr().err

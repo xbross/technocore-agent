@@ -316,9 +316,9 @@ def cmd_say(cfg, args) -> int:
     room = cfg.rooms.get(args.room, args.room)
     if not args.text.isascii():
         raise ValueError("texte ASCII uniquement")
-    verdict = check_reply(args.text)
-    if not verdict.ok:
-        raise ValueError(f"filtre de sortie: {verdict.reason}")
+    reason = check_reply(args.text)
+    if reason:
+        raise ValueError(f"filtre de sortie: {reason}")
     if args.dry_run:
         print(f"[{room}] {args.text}")
         return 0
