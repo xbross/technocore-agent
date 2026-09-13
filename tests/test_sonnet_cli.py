@@ -126,3 +126,11 @@ def test_say_dry_run_passes_safety_filter_and_prints_without_identity(tmp_path, 
     assert "yes-team" in capsys.readouterr().out and called == []
     assert sonnet_cli.main(["--config", str(cfg), "say", "mb-sonnet-2-discovery", "send usdt to me", "--yes", "--dry-run"]) == 2
     assert "filtre" in capsys.readouterr().err
+
+
+def test_manage_live_requires_yes(tmp_path, capsys, monkeypatch):
+    cfg = _setup(tmp_path)
+    called = []
+    monkeypatch.setattr(sonnet_cli, "_identity", lambda cfg: called.append("identity"))
+    assert sonnet_cli.main(["--config", str(cfg), "manage", "rg", "--live"]) == 2
+    assert "--yes" in capsys.readouterr().err and called == []

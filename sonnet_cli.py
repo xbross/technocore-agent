@@ -13,6 +13,8 @@
   poem-state GAME_ID  reconstruit l'etat d'un poeme depuis les recus arbitre de sa room (lecture)
   play GAME_ID        joue les mots : dry-run par defaut ; --live --yes pour poster (armed requis)
   submit-prep GAME_ID texte canonique, sha256 et paquet de soumission (sans x_post_ids) - lecture
+  manage GAME_ID      gestionnaire de roster (lead) : remplace les sieges qui ne signent pas ;
+                      dry-run par defaut, --live --yes pour ecrire (retrait, re-signature, invitation)
   team-request/roster-sign/withdraw/say  (ECRITURE, --yes + armed) messages de formation d'equipe
 
 Toute ecriture exige participant.armed = true dans sonnet.toml ET --yes sur la ligne de commande.
@@ -30,7 +32,7 @@ from pathlib import Path
 
 from technocore_agent import identity
 from technocore_agent.client import TechnocoreClient
-from technocore_agent.sonnet import lexicon, package, poem, register, team, writer
+from technocore_agent.sonnet import lexicon, manager, package, poem, register, team, writer
 from technocore_agent.sonnet.roster import roster_status, wait_for_roster
 from technocore_agent.sonnet.config import ConfigError, SonnetConfig
 from technocore_agent.sonnet.watch import SonnetWatcher
@@ -294,6 +296,36 @@ def cmd_play(cfg, args) -> int:
     return 0
 
 
+def cmd_manage(cfg, args) -> int:
+    live = bool(args.live)
+    if live:
+        _require_write(cfg, args, "gerer le roster")
+    _setup_logging(cfg, logging.DEBUG if args.verbose else logging.INFO)
+    ident = _identity(cfg)
+    client = TechnocoreClient()
+    lex, _ = _lexicon(cfg)
+    key = {w: lex[w] for w in lexicon.KEY_WORDS if w in lex}
+    room = _team_room(cfg, args.game_id)
+    page = client.read(room, limit=1)
+    generation = page.generation if page.generation is not None else 1
+    rules = manager.Rules(patience_s=args.patience_min * 60, active_window_s=args.active_min * 60,
+                          max_replacements=args.max_replacements)
+    from technocore_agent.sonnet.watch import Archive
+    m = manager.RosterManager(client, ident, cfg.referee_did, cfg.contest_id, args.game_id, cfg.rooms["discovery"],
+                              room, generation, key, state_path=cfg.state_path.parent / f"sonnet_manager_{args.game_id}.json",
+                              rules=rules, dry_run=not live, archive=Archive(cfg.archive_dir))
+    log.info("%s: gestionnaire de roster en mode %s (patience %d min, fenetre d'activite %d min, generation %s)",
+             args.game_id, "LIVE" if live else "DRY-RUN", args.patience_min, args.active_min, generation)
+    if args.once:
+        print(json.dumps(m.run_once(), indent=1))
+        return 0
+    stop = threading.Event()
+    for s_ in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(s_, lambda *_: stop.set())
+    m.run(args.poll, stop)
+    return 0
+
+
 def _post(cfg, ident, room: str, text: str) -> int:
     client = TechnocoreClient()
     res = client.say_signed(ident, room, text, int(__import__("time").time() * 1000))
@@ -401,6 +433,16 @@ def main(argv=None) -> int:
     p.add_argument("--steps", type=int, default=None, help="nombre de lectures max (defaut: infini)")
     p.add_argument("--wait-roster", action="store_true", help="attendre le recu roster_ready de l'arbitre avant de jouer")
     p.add_argument("-v", "--verbose", action="store_true")
+    p = sub.add_parser("manage")
+    p.add_argument("game_id")
+    p.add_argument("--live", action="store_true")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--patience-min", type=float, default=45)
+    p.add_argument("--active-min", type=float, default=90)
+    p.add_argument("--max-replacements", type=int, default=12)
+    p.add_argument("--poll", type=float, default=60)
+    p.add_argument("-v", "--verbose", action="store_true")
     for name in ("team-request", "withdraw"):
         p = sub.add_parser(name)
         p.add_argument("game_id")
@@ -425,7 +467,7 @@ def main(argv=None) -> int:
                 "register": cmd_register, "poem-state": cmd_poem_state, "submit-prep": cmd_submit_prep,
                 "roster-status": cmd_roster_status,
                 "play": cmd_play, "team-request": cmd_team_request, "roster-sign": cmd_roster_sign,
-                "withdraw": cmd_withdraw, "say": cmd_say}
+                "withdraw": cmd_withdraw, "say": cmd_say, "manage": cmd_manage}
     try:
         cfg = SonnetConfig.load(Path(args.config))
         return handlers[args.cmd](cfg, args)
