@@ -60,3 +60,11 @@ def test_roster_command_reports_coverage(tmp_path, capsys):
     assert sonnet_cli.main(["--config", str(cfg), "roster", DID, other]) == 0
     out = capsys.readouterr().out
     assert "missing" in out and "the" in out
+
+
+def test_register_command_requires_explicit_yes_and_never_writes_without_it(tmp_path, capsys, monkeypatch):
+    cfg = _setup(tmp_path)
+    called = []
+    monkeypatch.setattr(sonnet_cli, "_identity", lambda cfg: called.append("identity"))
+    assert sonnet_cli.main(["--config", str(cfg), "register"]) == 2
+    assert "--yes" in capsys.readouterr().err and called == []

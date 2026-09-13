@@ -8,6 +8,8 @@
   fetch-package       telecharge le paquet officiel au commit epingle et verifie les sha256
   verify-package      verifie les sha256 du paquet local
   watch [--once]      veille + archive JSONL des rooms du concours, recus arbitre verifies
+  register --yes      (ECRITURE) inscription au concours ; exige participant.armed = true
+                      et la validation humaine explicite (--yes). Fige le role et le DID.
 """
 from __future__ import annotations
 
@@ -20,8 +22,9 @@ import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from technocore_agent import identity
 from technocore_agent.client import TechnocoreClient
-from technocore_agent.sonnet import lexicon, package
+from technocore_agent.sonnet import lexicon, package, register
 from technocore_agent.sonnet.config import ConfigError, SonnetConfig
 from technocore_agent.sonnet.watch import SonnetWatcher
 
@@ -123,6 +126,34 @@ def cmd_verify(cfg, args) -> int:
     return 0
 
 
+def _identity(cfg: SonnetConfig) -> identity.Identity:
+    key_path = PROJECT_DIR / "identity" / "agent_key.pem"
+    return identity.load(key_path, identity.passphrase_from_env_or_prompt())
+
+
+def cmd_register(cfg, args) -> int:
+    if not args.yes:
+        print("erreur: l'inscription fige le role et le DID ; relance avec --yes apres validation humaine",
+              file=sys.stderr)
+        return 2
+    _setup_logging(cfg)
+    ident = _identity(cfg)
+    if cfg.did and cfg.did != ident.did:
+        raise ConfigError(f"participant.did ({cfg.did[-8:]}) ne correspond pas a la cle chargee ({ident.did[-8:]})")
+    print(f"inscription {cfg.contest_id} role={cfg.role} did=...{ident.did[-8:]} x={cfg.x_account_url}")
+    print(f"message: {register.registration_message(cfg, args.request_id)}")
+    receipt = register.register(TechnocoreClient(), ident, cfg, args.request_id, wait_seconds=args.wait)
+    out = cfg.path.parent / "state" / f"sonnet-registration-{args.request_id}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if receipt is None:
+        print("aucun recu dans le delai ; relancer avec le MEME request_id renvoie le recu d'origine (idempotence)")
+        return 1
+    out.write_text(json.dumps(receipt, indent=1), "utf-8")
+    print(json.dumps(receipt, indent=1))
+    print(f"recu archive dans {out}")
+    return 0 if receipt.get("status") == "accepted" else 1
+
+
 def cmd_watch(cfg, args) -> int:
     _setup_logging(cfg, logging.DEBUG if args.verbose else logging.INFO)
     rooms = [cfg.rooms[k] for k in sorted(cfg.rooms)]
@@ -158,13 +189,18 @@ def main(argv=None) -> int:
     p = sub.add_parser("watch")
     p.add_argument("--once", action="store_true")
     p.add_argument("-v", "--verbose", action="store_true")
+    p = sub.add_parser("register")
+    p.add_argument("--yes", action="store_true", help="validation humaine explicite")
+    p.add_argument("--request-id", default="register-1")
+    p.add_argument("--wait", type=float, default=600, help="attente max du recu arbitre (s)")
     args = parser.parse_args(argv)
     handlers = {"alphabet": cmd_alphabet, "words": cmd_words, "roster": cmd_roster, "pitch": cmd_pitch,
-                "fetch-package": cmd_fetch, "verify-package": cmd_verify, "watch": cmd_watch}
+                "fetch-package": cmd_fetch, "verify-package": cmd_verify, "watch": cmd_watch,
+                "register": cmd_register}
     try:
         cfg = SonnetConfig.load(Path(args.config))
         return handlers[args.cmd](cfg, args)
-    except (ConfigError, package.PackageError, ValueError) as e:
+    except (ConfigError, package.PackageError, register.Disarmed, identity.IdentityError, ValueError) as e:
         print(f"erreur: {e}", file=sys.stderr)
         return 2
 
