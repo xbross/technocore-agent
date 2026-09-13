@@ -44,3 +44,5 @@ state_path = "state/sonnet_watch.json"
 [brain]
 model = "opus"
 effort = "medium"
+max_calls_per_hour = 40      # plafond d'appels au modele (protege l'abonnement)
+max_words_per_poem = 60      # plafond de propositions par poeme

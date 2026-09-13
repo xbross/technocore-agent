@@ -107,3 +107,11 @@ def test_read_exposes_room_generation():
     c = TechnocoreClient(session=mock.Mock(spec=requests.Session, headers={}))
     c.session.get.return_value = fake_response(200, body)
     assert c.read("d-x").generation == 3
+
+
+def test_read_passes_long_poll_wait():
+    body = json.dumps({"room": "d-x", "count": 0, "first_seq": None, "last_seq": None, "generation": 1, "messages": []})
+    c = TechnocoreClient(session=mock.Mock(spec=requests.Session, headers={}))
+    c.session.get.return_value = fake_response(200, body)
+    c.read("d-x", since=4, wait=10)
+    assert c.session.get.call_args.kwargs["params"]["wait"] == 10

@@ -155,13 +155,15 @@ class TechnocoreClient:
         text = self._get("/rooms").text
         return [line.split()[0][len("/r/"):] for line in text.splitlines() if line.startswith("/r/")]
 
-    def read(self, room: str, since: int | None = None, limit: int = 200) -> RoomPage:
+    def read(self, room: str, since: int | None = None, limit: int = 200, wait: int | None = None) -> RoomPage:
         check_name(room, "room")
         # n= est un compteur jetable : il rend l'URL unique et contourne le cache CDN
         # quand on relit deux fois avec le meme since (recommande par le manuel, POLLING).
         params = {"format": "json", "limit": limit, "n": int(time.time() * 1000)}
         if since is not None:
             params["since"] = since
+        if wait:
+            params["wait"] = int(wait)  # long-poll : le serveur retient la reponse jusqu'a une nouvelle ligne
         data = self._get(f"/r/{room}", params).json()
         msgs = [
             Message(

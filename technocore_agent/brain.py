@@ -429,7 +429,7 @@ class ClaudeCliBrain(Brain):
             "Address each reply to that line's short handle."
         )
 
-    def _run(self, system: str, prompt: str) -> dict:
+    def _run(self, system: str, prompt: str, schema: dict | None = None) -> dict:
         import json
         import os
         import subprocess
@@ -437,7 +437,7 @@ class ClaudeCliBrain(Brain):
         cmd = [
             self.binary, "-p", "--model", self.model, "--tools", "", "--no-session-persistence",
             "--setting-sources", "", "--strict-mcp-config", "--output-format", "json",
-            "--json-schema", json.dumps(BATCH_SCHEMA), "--system-prompt", system,
+            "--json-schema", json.dumps(schema or BATCH_SCHEMA), "--system-prompt", system,
         ]
         if self.effort:
             cmd += ["--effort", self.effort]

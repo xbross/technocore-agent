@@ -10,6 +10,12 @@
   watch [--once]      veille + archive JSONL des rooms du concours, recus arbitre verifies
   register --yes      (ECRITURE) inscription au concours ; exige participant.armed = true
                       et la validation humaine explicite (--yes). Fige le role et le DID.
+  poem-state GAME_ID  reconstruit l'etat d'un poeme depuis les recus arbitre de sa room (lecture)
+  play GAME_ID        joue les mots : dry-run par defaut ; --live --yes pour poster (armed requis)
+  submit-prep GAME_ID texte canonique, sha256 et paquet de soumission (sans x_post_ids) - lecture
+  team-request/roster-sign/withdraw/say  (ECRITURE, --yes + armed) messages de formation d'equipe
+
+Toute ecriture exige participant.armed = true dans sonnet.toml ET --yes sur la ligne de commande.
 """
 from __future__ import annotations
 
@@ -24,7 +30,7 @@ from pathlib import Path
 
 from technocore_agent import identity
 from technocore_agent.client import TechnocoreClient
-from technocore_agent.sonnet import lexicon, package, register
+from technocore_agent.sonnet import lexicon, package, poem, register, team, writer
 from technocore_agent.sonnet.config import ConfigError, SonnetConfig
 from technocore_agent.sonnet.watch import SonnetWatcher
 
@@ -154,6 +160,166 @@ def cmd_register(cfg, args) -> int:
     return 0 if receipt.get("status") == "accepted" else 1
 
 
+def _require_write(cfg: SonnetConfig, args, what: str) -> None:
+    if not getattr(args, "yes", False):
+        print(f"erreur: {what} est une ecriture signee ; relance avec --yes apres validation humaine", file=sys.stderr)
+        raise SystemExit(2)
+    if not cfg.armed:
+        raise register.Disarmed("participant.armed = false dans sonnet.toml : aucune ecriture autorisee")
+
+
+def _read_all(client, room: str):
+    """Lit toute la room depuis 0 (pages de 200), retourne (messages, generation)."""
+    msgs, since, gen = [], 0, None
+    while True:
+        page = client.read(room, since=since)
+        gen = page.generation if page.generation is not None else gen
+        if not page.messages:
+            return msgs, gen
+        msgs.extend(page.messages)
+        since = max(m.seq for m in page.messages)
+
+
+def _team_room(cfg: SonnetConfig, game_id: str) -> str:
+    return f"d-sonnet-2-team-{team.check_game_id(game_id)}"
+
+
+def _state_for(cfg: SonnetConfig, client, game_id: str):
+    lex, prons = _lexicon(cfg)
+    room = _team_room(cfg, game_id)
+    msgs, gen = _read_all(client, room)
+    st = poem.PoemState.from_messages(msgs, room, cfg.referee_did, game_id, lex)
+    if st.generation is None:
+        st.generation = gen
+    return st, lex, prons
+
+
+def _print_state(st) -> None:
+    print(f"{st.game_id}: version {st.version}, state_hash {st.state_hash}, {st.syllables}/140 syllabes, "
+          f"complet={st.complete}, generation {st.generation}, dernier contributeur ...{(st.last_contributor or '-')[-8:]}")
+    for i, line in enumerate(st.lines(), 1):
+        print(f"  {i:2d}. {' '.join(line)}")
+    if not st.complete:
+        print(f"  ligne {st.line_index + 1} : {st.remaining} syllabe(s) restante(s)")
+
+
+def cmd_poem_state(cfg, args) -> int:
+    st, _, _ = _state_for(cfg, TechnocoreClient(), args.game_id)
+    _print_state(st)
+    return 0
+
+
+def cmd_submit_prep(cfg, args) -> int:
+    st, lex, _ = _state_for(cfg, TechnocoreClient(), args.game_id)
+    _print_state(st)
+    if not st.complete:
+        print("poeme incomplet : pas de soumission possible", file=sys.stderr)
+        return 1
+    text = poem.canonical_text(st.lines())
+    validator = package.load_validator(cfg.package_dir, cfg.package_sha256)
+    counts = validator.validate_poem(text, lex, exact_ten=True)
+    digest = poem.poem_sha256(text)
+    print("\n--- texte canonique (a publier tel quel depuis le compte X du dernier contributeur) ---")
+    print(text)
+    print(f"--- sha256 {digest} ; syllabes par ligne {counts}")
+    packet = {"type": "sonnet.submit.v1", "contest_id": cfg.contest_id, "game_id": st.game_id,
+              "poem_room": st.room, "room_generation": st.generation, "final_version": st.version,
+              "poem_sha256": digest, "x_post_ids": ["<a completer apres publication>"],
+              "request_id": f"submit-{st.game_id}-1"}
+    print("paquet (x_post_ids a completer) :", json.dumps(packet, separators=(",", ":")))
+    who = st.last_contributor or ""
+    print("dernier contributeur :", who, "(c'est nous)" if cfg.did == who else "(pas nous : il publie et soumet)")
+    return 0
+
+
+def _brain(cfg: SonnetConfig):
+    from technocore_agent.brain import ClaudeCliBrain
+    import os
+    binary = os.environ.get("TECHNOCORE_CLAUDE_BIN", "claude")
+    cli = ClaudeCliBrain(binary=binary, model=cfg.model, effort=cfg.effort, max_thinking_tokens=None,
+                         max_calls_per_hour=int(cfg.extra.get("brain", {}).get("max_calls_per_hour", 40)),
+                         cwd=str(PROJECT_DIR))
+    return writer.ClaudeWordBrain(cli)
+
+
+def cmd_play(cfg, args) -> int:
+    live = bool(args.live)
+    if live:
+        _require_write(cfg, args, "jouer des mots")
+    _setup_logging(cfg, logging.DEBUG if args.verbose else logging.INFO)
+    ident = _identity(cfg)
+    client = TechnocoreClient()
+    st, lex, prons = _state_for(cfg, client, args.game_id)
+    _print_state(st)
+    playable = lexicon.playable_words(lex, lexicon.did_alphabet(ident.did))
+    validator = package.load_validator(cfg.package_dir, cfg.package_sha256)
+    brain = writer.HeuristicBrain() if args.no_model else _brain(cfg)
+    w = writer.Writer(client, ident, cfg.contest_id, cfg.referee_did, playable, prons, brain,
+                      archive_dir=cfg.archive_dir, dry_run=not live,
+                      max_words_per_poem=int(cfg.extra.get("brain", {}).get("max_words_per_poem", 60)),
+                      official_validate=lambda word, did: validator.validate_word(word, did, lex))
+    stop = threading.Event()
+    for s_ in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(s_, lambda *_: stop.set())
+    log.info("%s: mode %s, modele %s", args.game_id, "LIVE" if live else "DRY-RUN", "aucun" if args.no_model else cfg.model)
+    w.run(st, stop=stop, max_steps=args.steps)
+    _print_state(st)
+    return 0
+
+
+def _post(cfg, ident, room: str, text: str) -> int:
+    client = TechnocoreClient()
+    res = client.say_signed(ident, room, text, int(__import__("time").time() * 1000))
+    print(f"poste dans {room}: seq={res.seq} verifie={res.verified}")
+    print(text)
+    return 0 if res.verified else 1
+
+
+def cmd_team_request(cfg, args) -> int:
+    _require_write(cfg, args, "la demande de room")
+    text = team.team_request_message(cfg.contest_id, args.game_id, args.request_id or f"room-{args.game_id}-1")
+    if args.dry_run:
+        print(text)
+        return 0
+    return _post(cfg, _identity(cfg), cfg.rooms["discovery"], text)
+
+
+def cmd_roster_sign(cfg, args) -> int:
+    _require_write(cfg, args, "la signature du roster")
+    text = team.roster_message(cfg.contest_id, args.game_id, _team_room(cfg, args.game_id), args.generation,
+                               args.members, args.request_id or f"roster-{args.game_id}-1")
+    if cfg.did and cfg.did not in args.members:
+        raise ConfigError("notre DID n'est pas dans la liste des membres")
+    if args.dry_run:
+        print(text)
+        return 0
+    return _post(cfg, _identity(cfg), cfg.rooms["discovery"], text)
+
+
+def cmd_withdraw(cfg, args) -> int:
+    _require_write(cfg, args, "le retrait")
+    text = team.withdraw_message(cfg.contest_id, args.game_id, args.request_id or f"wd-{args.game_id}-1")
+    if args.dry_run:
+        print(text)
+        return 0
+    return _post(cfg, _identity(cfg), cfg.rooms["discovery"], text)
+
+
+def cmd_say(cfg, args) -> int:
+    _require_write(cfg, args, "un message dans une room du concours")
+    from technocore_agent.safety import check_reply
+    room = cfg.rooms.get(args.room, args.room)
+    if not args.text.isascii():
+        raise ValueError("texte ASCII uniquement")
+    verdict = check_reply(args.text)
+    if not verdict.ok:
+        raise ValueError(f"filtre de sortie: {verdict.reason}")
+    if args.dry_run:
+        print(f"[{room}] {args.text}")
+        return 0
+    return _post(cfg, _identity(cfg), room, args.text)
+
+
 def cmd_watch(cfg, args) -> int:
     _setup_logging(cfg, logging.DEBUG if args.verbose else logging.INFO)
     rooms = [cfg.rooms[k] for k in sorted(cfg.rooms)]
@@ -193,13 +359,46 @@ def main(argv=None) -> int:
     p.add_argument("--yes", action="store_true", help="validation humaine explicite")
     p.add_argument("--request-id", default="register-1")
     p.add_argument("--wait", type=float, default=600, help="attente max du recu arbitre (s)")
+    p = sub.add_parser("poem-state")
+    p.add_argument("game_id")
+    p = sub.add_parser("submit-prep")
+    p.add_argument("game_id")
+    p = sub.add_parser("play")
+    p.add_argument("game_id")
+    p.add_argument("--live", action="store_true", help="poster reellement (sinon dry-run)")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--no-model", action="store_true", help="choix heuristique sans appel de modele")
+    p.add_argument("--steps", type=int, default=None, help="nombre de lectures max (defaut: infini)")
+    p.add_argument("-v", "--verbose", action="store_true")
+    for name in ("team-request", "withdraw"):
+        p = sub.add_parser(name)
+        p.add_argument("game_id")
+        p.add_argument("--yes", action="store_true")
+        p.add_argument("--dry-run", action="store_true")
+        p.add_argument("--request-id")
+    p = sub.add_parser("roster-sign")
+    p.add_argument("game_id")
+    p.add_argument("--generation", type=int, required=True)
+    p.add_argument("--members", nargs="+", required=True)
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--request-id")
+    p = sub.add_parser("say")
+    p.add_argument("room", help="cle de [rooms] (discovery, campaign...) ou nom de room")
+    p.add_argument("text")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     handlers = {"alphabet": cmd_alphabet, "words": cmd_words, "roster": cmd_roster, "pitch": cmd_pitch,
                 "fetch-package": cmd_fetch, "verify-package": cmd_verify, "watch": cmd_watch,
-                "register": cmd_register}
+                "register": cmd_register, "poem-state": cmd_poem_state, "submit-prep": cmd_submit_prep,
+                "play": cmd_play, "team-request": cmd_team_request, "roster-sign": cmd_roster_sign,
+                "withdraw": cmd_withdraw, "say": cmd_say}
     try:
         cfg = SonnetConfig.load(Path(args.config))
         return handlers[args.cmd](cfg, args)
+    except SystemExit as e:
+        return int(e.code or 0)
     except (ConfigError, package.PackageError, register.Disarmed, identity.IdentityError, ValueError) as e:
         print(f"erreur: {e}", file=sys.stderr)
         return 2
