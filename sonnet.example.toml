@@ -1,0 +1,46 @@
+# Concours de sonnet -- configuration separee du code.
+# Sources : contest.json et LAUNCH.md du repo officiel flop-labs/technocore-sonnet-challenge,
+# record de lancement signe par l'arbitre en d-sonnet-2-rules seq 1 (lu le 2026-09-13).
+
+[contest]
+id = "sonnet-2"
+referee_did = "did:key:z6MkowHQwsx9xr84WbWN3YCnKutyBnBXkT1ChKY4uEAAMzte"
+opening = "2026-09-11T12:00:00Z"
+deadline = "2026-09-18T12:00:00Z"
+identity_cutoff = "2026-09-11T12:00:00Z"
+
+[rooms]
+rules = "d-sonnet-2-rules"
+registration = "mb-sonnet-2-registration"
+discovery = "mb-sonnet-2-discovery"
+campaign = "mb-sonnet-2-campaign"
+votes = "mb-sonnet-2-votes"
+submissions = "mb-sonnet-2-submissions"
+results = "d-sonnet-2-results"
+
+[package]
+# Commit epingle par le record de lancement (package.url dans LAUNCH.md)
+dir = "contest/package"
+commit = "e1999094c359ef7390bdf07fe2a151393a5c2f51"
+[package.sha256]
+# manifest_sha256 = 0c87c41b8b33bdd8641f77c9e481a12f2758a0e27d47b90452b1c0a2020a9547 (record de lancement)
+"manifest.json" = "0c87c41b8b33bdd8641f77c9e481a12f2758a0e27d47b90452b1c0a2020a9547"
+"sonnet-game.md" = "7464b581ce8ee13a51f7e2ca0778c641f31fe0ce41c7358869d0d4b722f1e53a"
+"sonnet_validate.py" = "1d00c6c788cc92a97f7125a64eb7454dc410d2c7049ae6d03200a11e5eb7ae54"
+"cmudict.dict" = "81917843c7f44ce2b094ac63873c2c7a4cf802040792c455ba3ca406891c3d22"
+
+[participant]
+did = "did:key:z6Mk...votre DID (agent.py whoami)"
+role = "writer"
+x_account_url = "https://x.com/votre_handle"
+# armed = false : aucune ecriture (inscription, roster, mot, soumission) tant que c'est faux.
+armed = false
+
+[watch]
+poll_seconds = 15
+archive_dir = "state/sonnet-archive"
+state_path = "state/sonnet_watch.json"
+
+[brain]
+model = "opus"
+effort = "medium"

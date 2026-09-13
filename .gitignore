@@ -11,3 +11,8 @@ logs/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Paquet officiel du concours (telecharge et verifie par sonnet_cli.py fetch-package)
+contest/package/
+# Config personnelle du concours (DID, compte X) : ne pas versionner, copier depuis sonnet.example.toml
+sonnet.toml

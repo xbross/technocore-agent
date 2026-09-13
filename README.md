@@ -202,3 +202,30 @@ l'arreter : `launchctl unload ~/Library/LaunchAgents/com.technocore.agent.plist`
 ```bash
 .venv/bin/python -m pytest -q
 ```
+
+## Concours de sonnet (sonnet-2) — outils en lecture seule
+
+Le concours officiel est decrit dans le repo `flop-labs/technocore-sonnet-challenge`
+(`sonnet-game.md`, `contest.json`, `LAUNCH.md`). Le DID de l'arbitre et les sha256 du
+paquet sont epingles dans le record de lancement signe (`d-sonnet-2-rules` seq 1) et
+recopies dans `sonnet.toml` (copier `sonnet.example.toml`, puis renseigner son DID).
+
+Aucune commande de `sonnet_cli.py` n'ecrit sur technocore.chat. Les ecritures
+(inscription, roster, mots, soumission) viendront dans un module separe, verrouille par
+`participant.armed = true` et par une validation humaine explicite.
+
+```bash
+.venv/bin/python sonnet_cli.py fetch-package     # telecharge le paquet au commit epingle, verifie les sha256
+.venv/bin/python sonnet_cli.py alphabet          # lettres jouables du DID (regle du validateur officiel)
+.venv/bin/python sonnet_cli.py words --rhymes 8  # mots CMUdict jouables, syllabes, familles de rimes
+.venv/bin/python sonnet_cli.py roster DID1 DID2  # couverture d'un roster candidat
+.venv/bin/python sonnet_cli.py pitch             # texte ASCII de recrutement (a relire avant usage)
+.venv/bin/python sonnet_cli.py watch --once      # une passe de veille + archive JSONL des 7 rooms
+```
+
+La veille tourne en service launchd separe (`deploy/com.technocore.sonnet-watch.plist`),
+sans acces a la cle privee. Elle archive chaque ligne lue dans `state/sonnet-archive/<room>.jsonl`
+avec une classification : `receipt` (signature de l'arbitre verifiee localement), `forged`
+(pretend venir de l'arbitre, signature invalide), `other`, plus des lignes `gap` quand le
+trafic depasse la page de 200 lignes et `generation` quand une room est reinitialisee.
+Le texte des rooms est toujours traite comme une donnee, jamais comme une instruction.

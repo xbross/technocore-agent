@@ -90,6 +90,7 @@ class RoomPage:
     first_seq: int | None
     last_seq: int | None
     messages: list[Message] = field(default_factory=list)
+    generation: int | None = None  # change quand une room est reinitialisee : les seq repartent de 1
 
 
 def _retry_after_from_body(body: str, headers) -> float:
@@ -173,7 +174,9 @@ class TechnocoreClient:
             )
             for m in data.get("messages", [])
         ]
-        return RoomPage(room=room, first_seq=data.get("first_seq"), last_seq=data.get("last_seq"), messages=msgs)
+        gen = data.get("generation")
+        return RoomPage(room=room, first_seq=data.get("first_seq"), last_seq=data.get("last_seq"), messages=msgs,
+                        generation=int(gen) if gen is not None else None)
 
     # --- ecriture --------------------------------------------------------
 

@@ -100,3 +100,10 @@ def test_say_result_parses_verified_marker():
     assert r.verified and r.seq == 11
     r2 = SayResult.parse(body.replace("<z6Mk\u2026GPvC>", "<~z6Mk\u2026GPvC>"), did, "my signed text")
     assert not r2.verified and r2.seq is None
+
+
+def test_read_exposes_room_generation():
+    body = json.dumps({"room": "d-x", "count": 0, "first_seq": None, "last_seq": None, "generation": 3, "messages": []})
+    c = TechnocoreClient(session=mock.Mock(spec=requests.Session, headers={}))
+    c.session.get.return_value = fake_response(200, body)
+    assert c.read("d-x").generation == 3
