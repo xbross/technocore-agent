@@ -169,8 +169,13 @@ def _require_write(cfg: SonnetConfig, args, what: str) -> None:
 
 
 def _read_all(client, room: str):
-    """Lit toute la room depuis 0 (pages de 200), retourne (messages, generation)."""
-    msgs, since, gen = [], 0, None
+    """Tout l'historique retenu de la room : export JSONL (la pagination ne rend que les 200
+    dernieres lignes), puis complement par lecture depuis le dernier seq."""
+    if hasattr(client, "export"):
+        msgs, gen = client.export(room)
+    else:
+        msgs, gen = [], None
+    since = max((m.seq for m in msgs), default=0)
     while True:
         page = client.read(room, since=since)
         gen = page.generation if page.generation is not None else gen

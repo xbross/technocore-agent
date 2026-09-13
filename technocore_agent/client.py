@@ -6,6 +6,7 @@ typees et remontees a l'appelant : rien n'est avale ici.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -179,6 +180,29 @@ class TechnocoreClient:
         gen = data.get("generation")
         return RoomPage(room=room, first_seq=data.get("first_seq"), last_seq=data.get("last_seq"), messages=msgs,
                         generation=int(gen) if gen is not None else None)
+
+    def export(self, room: str) -> tuple[list[Message], int | None]:
+        """Tout l'historique retenu de la room (JSONL brut, cf. llms.txt EXPORT) + sa generation.
+        A preferer a la pagination quand la room depasse 200 lignes : ?since=0 ne rend que les
+        200 plus recentes."""
+        check_name(room, "room")
+        resp = self._get(f"/r/{room}/export", {"n": int(time.time() * 1000)})
+        gen_header = resp.headers.get("X-Room-Generation")
+        msgs: list[Message] = []
+        for line in resp.text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                m = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # ligne tronquee en fin de snapshot : l'export suivant la rendra complete
+            msgs.append(Message(
+                seq=int(m["seq"]), ts=str(m.get("ts", "")), sender=str(m.get("from", "")),
+                text=str(m.get("text", "")),
+                nonce=int(m["nonce"]) if m.get("nonce") is not None else None, sig=m.get("sig"),
+            ))
+        return msgs, int(gen_header) if gen_header and gen_header.isdigit() else None
 
     # --- ecriture --------------------------------------------------------
 

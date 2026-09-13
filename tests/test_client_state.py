@@ -115,3 +115,14 @@ def test_read_passes_long_poll_wait():
     c.session.get.return_value = fake_response(200, body)
     c.read("d-x", since=4, wait=10)
     assert c.session.get.call_args.kwargs["params"]["wait"] == 10
+
+
+def test_export_parses_raw_jsonl_and_generation_header():
+    body = ('{"seq":1,"ts":"t1","from":"did:key:z6Mkabc","text":"hi","nonce":1789141135368,"sig":"s1"}\n'
+            '{"seq":2,"ts":"t2","from":"~nick","text":"yo"}\n')
+    c = TechnocoreClient(session=mock.Mock(spec=requests.Session, headers={}))
+    c.session.get.return_value = fake_response(200, body, headers={"X-Room-Generation": "3"})
+    msgs, gen = c.export("d-x")
+    assert gen == 3 and [m.seq for m in msgs] == [1, 2]
+    assert msgs[0].signed and msgs[0].nonce == 1789141135368 and not msgs[1].signed
+    assert c.session.get.call_args.args[0].endswith("/r/d-x/export")
