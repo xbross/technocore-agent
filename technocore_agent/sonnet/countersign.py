@@ -29,6 +29,7 @@ class CounterSigner:
         self.now, self.sleep, self.archive = now, sleep, archive
         self.cursor = 0
         self.signed_members: list[str] | None = None
+        self.attempted: set[tuple[str, ...]] = set()  # listes deja tentees : jamais de nouvelle tentative
         self.ready = False
         self._last_nonce = 0
         self._counter = 0
@@ -111,6 +112,9 @@ class CounterSigner:
         members = list(target["members"])
         if members == self.signed_members:
             return {"action": "already-signed"}
+        if tuple(members) in self.attempted:
+            return {"action": "wait"}
+        self.attempted.add(tuple(members))
         log.info("%s: roster du lead ...%s nous nomme (%d membres, gen %s)", self.game_id, self.lead_did[-8:],
                  len(members), target.get("room_generation"))
         if self.dry_run:

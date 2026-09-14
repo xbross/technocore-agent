@@ -86,3 +86,27 @@ def test_dry_run_never_writes_and_rejects_bad_sizes(tmp_path):
                                   now=iter(range(0, 10000)).__next__)
     out = w.step()
     assert client.said == [] and out["action"] == "planned"
+
+
+def test_a_roster_whose_signature_failed_is_not_retried_every_step(tmp_path):
+    ref, me, lead, other, client = _setup(tmp_path)
+    members = [lead.did, me.did] + ["did:key:z6Mk" + c * 44 for c in "ab"]
+
+    class RejectingClient(FakeClient):
+        def say_signed(self, ident, room, text, nonce):
+            self.said.append(text)
+            seq = self.add(ident, text)
+            data = json.loads(text)
+            self.add(self.ref, json.dumps({"type": "sonnet.receipt.v1", "status": "rejected", "reason": "consent: withdraw before changing",
+                                           "request_id": data["request_id"], "sender_did": ident.did}))
+            return SayResult("", seq, True)
+
+    client = RejectingClient(ref)
+    client.add(lead, team.roster_message("sonnet-2", "h5", "d-sonnet-2-team-h5", 1, members, "l-1"))
+    w = countersign.CounterSigner(client, me, referee_did=ref.did, contest_id="sonnet-2", game_id="h5",
+                                  lead_did=lead.did, discovery_room=DISC, dry_run=False, sleep=lambda s: None,
+                                  now=iter(range(0, 10000)).__next__)
+    assert w.step()["action"] == "sign-failed"
+    assert w.step()["action"] == "wait" and len(client.said) == 1  # pas de nouvelle tentative sur la meme liste
+    client.add(lead, team.roster_message("sonnet-2", "h5", "d-sonnet-2-team-h5", 1, members, "l-1-repost"))
+    assert w.step()["action"] == "wait" and len(client.said) == 1  # ni sur un repost identique
