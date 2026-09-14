@@ -197,8 +197,13 @@ class RosterManager:
         return f"xav-{self.game_id}-{kind}-{int(self.now() * 1000)}-{self.state['counter']}"
 
     def _fail(self, action: str, receipt) -> dict:
-        self.state["failures"] = int(self.state.get("failures", 0)) + 1
-        pause = min(1800 * 2 ** (self.state["failures"] - 1), 6 * 3600)
+        reason = str((receipt or {}).get("reason", "")) if isinstance(receipt, dict) else ""
+        if receipt is not None and ("frozen" in reason or "unregistered" in reason):
+            # rejet deterministe : on a appris quelque chose (liste noire), on reessaie vite avec un autre candidat
+            pause = 300
+        else:
+            self.state["failures"] = int(self.state.get("failures", 0)) + 1
+            pause = min(1800 * 2 ** (self.state["failures"] - 1), 6 * 3600)
         self.state["next_attempt_at"] = self.now() + pause
         self._save()
         log.warning("%s: %s (%s) ; pause %d min avant nouvel essai", self.game_id, action, receipt, pause // 60)

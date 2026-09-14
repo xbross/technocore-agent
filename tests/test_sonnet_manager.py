@@ -278,3 +278,14 @@ def test_member_causing_frozen_or_unregistered_rejection_is_blacklisted_and_repl
     assert out["action"] == "replaced" and out["new"] == good.did and bad.did not in out["members"]
     types = [json.loads(t)["type"] for _, t in client.said if t.startswith("{")]
     assert types.count("sonnet.withdraw.v1") == 1
+
+
+def test_deterministic_rejection_pauses_briefly_while_silence_pauses_long(tmp_path):
+    w = _world(tmp_path)
+    m = manager.RosterManager(FakeClient(w), w.me, referee_did=w.ref.did, contest_id="sonnet-2", game_id=GAME,
+                              discovery_room=DISC, poem_room=ROOM, generation=1, key_words=KEY,
+                              state_path=tmp_path / "m.json", now=lambda: 1000.0)
+    out = m._fail("sign-failed", {"status": "rejected", "reason": "roster: member already frozen"})
+    assert out["pause_s"] <= 300 and m.state["failures"] == 0
+    out = m._fail("withdraw-failed", None)
+    assert out["pause_s"] >= 1800 and m.state["failures"] == 1
