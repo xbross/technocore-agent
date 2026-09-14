@@ -143,3 +143,12 @@ def test_countersign_live_requires_yes(tmp_path, capsys, monkeypatch):
     assert sonnet_cli.main(["--config", str(cfg), "countersign", "h5", "--lead",
                             "did:key:z6MkowHQwsx9xr84WbWN3YCnKutyBnBXkT1ChKY4uEAAMzte", "--live"]) == 2
     assert "--yes" in capsys.readouterr().err and called == []
+
+
+def test_say_allows_our_own_registered_x_url_but_no_other_link(tmp_path, capsys, monkeypatch):
+    cfg = _setup(tmp_path)
+    text = (tmp_path / "sonnet.toml").read_text().replace('role = "writer"', 'role = "writer"\narmed = true\nx_account_url = "https://x.com/rektbycryptos"')
+    (tmp_path / "sonnet.toml").write_text(text, "utf-8")
+    monkeypatch.setattr(sonnet_cli, "_identity", lambda cfg: None)
+    assert sonnet_cli.main(["--config", str(cfg), "say", "mb-sonnet-2-discovery", "my account is https://x.com/rektbycryptos", "--yes", "--dry-run"]) == 0
+    assert sonnet_cli.main(["--config", str(cfg), "say", "mb-sonnet-2-discovery", "see https://x.com/someone_else", "--yes", "--dry-run"]) == 2

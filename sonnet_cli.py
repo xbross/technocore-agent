@@ -408,7 +408,9 @@ def cmd_say(cfg, args) -> int:
     room = cfg.rooms.get(args.room, args.room)
     if not args.text.isascii():
         raise ValueError("texte ASCII uniquement")
-    reason = check_reply(args.text)
+    # notre propre URL X enregistree est la seule exception au filtre anti-liens (exigee par le concours)
+    probe = args.text.replace(cfg.x_account_url, "OUR-REGISTERED-X-ACCOUNT") if cfg.x_account_url else args.text
+    reason = check_reply(probe)
     if reason:
         raise ValueError(f"filtre de sortie: {reason}")
     if args.dry_run:
