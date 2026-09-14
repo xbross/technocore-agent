@@ -172,13 +172,14 @@ class RosterManager:
                  discovery_room: str, poem_room: str, generation: int, key_words: dict, state_path: Path,
                  rules: Rules | None = None, dry_run: bool = True, coverage_required: bool = True,
                  now: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
-                 archive=None):
+                 archive=None, hold_path=None):
         self.client, self.ident, self.referee_did = client, ident, referee_did
         self.contest_id, self.game_id = contest_id, game_id
         self.discovery_room, self.poem_room, self.generation = discovery_room, poem_room, generation
         self.key_words, self.rules = key_words, rules or Rules()
         self.dry_run, self.coverage_required = dry_run, coverage_required
         self.now, self.sleep, self.archive = now, sleep, archive
+        self.hold_path = Path(hold_path) if hold_path else None
         self.state_path = Path(state_path)
         self.state = {"replacements": 0, "counter": 0, "history": [], "failures": 0, "next_attempt_at": 0.0, "blacklist": []}
         self._last_nonce = 0
@@ -256,6 +257,8 @@ class RosterManager:
                 f"Members please countersign EXACTLY: {json.dumps(template, separators=(',', ':'))}")
 
     def run_once(self) -> dict:
+        if self.hold_path is not None and self.hold_path.exists():
+            return {"action": "hold", "reason": "consentement donne ailleurs (fichier de garde present)"}
         msgs, _ = self.client.export(self.discovery_room)
         st = roster_status(msgs, self.discovery_room, self.referee_did, self.game_id, self.ident.did)
         if st["ready"]:
@@ -322,7 +325,7 @@ class RosterManager:
             if out["action"] == "ready":
                 log.info("%s: roster pret, le gestionnaire s'arrete", self.game_id)
                 return
-            if out["action"] != "wait":
+            if out["action"] not in ("wait", "hold"):
                 log.info("%s: %s", self.game_id, json.dumps(out)[:300])
             if stop is not None:
                 stop.wait(poll_seconds)

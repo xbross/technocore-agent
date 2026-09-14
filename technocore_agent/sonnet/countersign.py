@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Callable
 
@@ -20,23 +21,43 @@ log = logging.getLogger("technocore.sonnet.countersign")
 
 
 class CounterSigner:
-    def __init__(self, client, ident: Identity, referee_did: str, contest_id: str, game_id: str, lead_did: str,
-                 discovery_room: str, dry_run: bool = True, receipt_wait_s: float = 120,
-                 now: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep, archive=None):
+    def __init__(self, client, ident: Identity, referee_did: str, contest_id: str, game_id: str | None,
+                 lead_did: str | None = None, discovery_room: str = "mb-sonnet-2-discovery", dry_run: bool = True,
+                 receipt_wait_s: float = 120, now: Callable[[], float] = time.time,
+                 sleep: Callable[[float], None] = time.sleep, archive=None, lead_dids: set[str] | None = None,
+                 release_game: str | None = None, hold_path=None):
+        """game_id=None : n'importe quel jeu (la room doit correspondre au game_id du roster).
+        lead_dids : ensemble des leads acceptes (lead_did reste accepte pour compatibilite).
+        release_game : notre propre equipe, dont on libere le consentement avant de signer ailleurs.
+        hold_path : fichier ecrit apres une signature externe, lu par le gestionnaire pour se mettre en pause."""
         self.client, self.ident, self.referee_did = client, ident, referee_did
-        self.contest_id, self.game_id, self.lead_did = contest_id, game_id, lead_did
+        self.contest_id, self.game_id = contest_id, game_id
+        self.leads = set(lead_dids or set()) | ({lead_did} if lead_did else set())
+        self.lead_did = lead_did or (sorted(self.leads)[0] if self.leads else "")
         self.room, self.dry_run, self.receipt_wait_s = discovery_room, dry_run, receipt_wait_s
         self.now, self.sleep, self.archive = now, sleep, archive
+        self.release_game, self.hold_path = release_game, hold_path
         self.cursor = 0
+        self.signed_game: str | None = None
         self.signed_members: list[str] | None = None
-        self.attempted: set[tuple[str, ...]] = set()  # listes deja tentees : jamais de nouvelle tentative
+        self.attempted: set[tuple] = set()  # listes deja tentees : jamais de nouvelle tentative
         self.ready = False
         self._last_nonce = 0
         self._counter = 0
 
-    def _rid(self, kind: str) -> str:
+    def _rid(self, kind: str, game: str | None = None) -> str:
         self._counter += 1
-        return f"xav-{self.game_id}-{kind}-{int(self.now() * 1000)}-{self._counter}"
+        return f"xav-{game or self.game_id}-{kind}-{int(self.now() * 1000)}-{self._counter}"
+
+    def _release(self, game: str, what: str) -> bool:
+        """Retire notre consentement sur `game` ; True si accepte (ou deja absent)."""
+        rid = self._rid("wd", game)
+        res = self._post(withdraw_message(self.contest_id, game, rid))
+        rec = self._await_receipt(rid, res.seq or self.cursor)
+        if rec and (rec.get("status") == "accepted" or "missing" in str(rec.get("reason", ""))):
+            return True
+        log.warning("%s: %s non confirme (%s)", game, what, rec)
+        return False
 
     def _nonce(self) -> int:
         n = max(int(time.time() * 1000), self._last_nonce + 1)
@@ -45,20 +66,25 @@ class CounterSigner:
 
     def acceptable(self, msg) -> dict | None:
         """Le roster du lead qui nous nomme, ou None."""
-        if msg.sender != self.lead_did or not msg.signed:
+        if msg.sender not in self.leads or not msg.signed:
             return None
         try:
             data = json.loads(msg.text)
         except ValueError:
             return None
-        if not isinstance(data, dict) or data.get("type") != "sonnet.roster.v1" or data.get("game_id") != self.game_id:
+        if not isinstance(data, dict) or data.get("type") != "sonnet.roster.v1":
+            return None
+        game = data.get("game_id")
+        if not isinstance(game, str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,15}$", game):
+            return None
+        if self.game_id is not None and game != self.game_id:
             return None
         members = data.get("members")
         if not isinstance(members, list) or not 4 <= len(members) <= 8 or self.ident.did not in members:
             return None
         if not all(isinstance(m, str) and ED25519_DID.fullmatch(m) for m in members) or len(set(members)) != len(members):
             return None
-        if data.get("poem_room") != f"d-sonnet-2-team-{self.game_id}":
+        if data.get("poem_room") != f"d-sonnet-2-team-{game}":
             return None
         return data
 
@@ -110,38 +136,42 @@ class CounterSigner:
         if target is None:
             return {"action": "wait"}
         members = list(target["members"])
-        if members == self.signed_members:
+        game = str(target["game_id"])
+        if members == self.signed_members and game == self.signed_game:
             return {"action": "already-signed"}
-        if tuple(members) in self.attempted:
+        if (game, tuple(members)) in self.attempted:
             return {"action": "wait"}
-        self.attempted.add(tuple(members))
-        log.info("%s: roster du lead ...%s nous nomme (%d membres, gen %s)", self.game_id, self.lead_did[-8:],
-                 len(members), target.get("room_generation"))
+        self.attempted.add((game, tuple(members)))
+        log.info("%s: roster d'un lead autorise nous nomme (%d membres, gen %s)", game, len(members),
+                 target.get("room_generation"))
         if self.dry_run:
-            return {"action": "planned", "members": members}
-        if self.signed_members is not None:  # liste revisee : liberer d'abord notre consentement
-            rid = self._rid("wd")
-            res = self._post(withdraw_message(self.contest_id, self.game_id, rid))
-            rec = self._await_receipt(rid, res.seq or self.cursor)
-            if not rec or rec.get("status") != "accepted":
-                log.warning("%s: retrait non confirme (%s)", self.game_id, rec)
-                return {"action": "withdraw-failed", "receipt": rec}
-            self.signed_members = None
-        rid = self._rid("roster")
-        text = roster_message(self.contest_id, self.game_id, str(target["poem_room"]), int(target["room_generation"]),
+            return {"action": "planned", "game": game, "members": members}
+        if self.signed_members is not None and self.signed_game:  # liste revisee ou autre equipe : liberer d'abord
+            if not self._release(self.signed_game, "retrait"):
+                return {"action": "withdraw-failed"}
+            self.signed_members, self.signed_game = None, None
+        elif self.release_game and self.release_game != game:  # notre propre equipe (gestionnaire)
+            if not self._release(self.release_game, "liberation de notre equipe"):
+                return {"action": "withdraw-failed"}
+        rid = self._rid("roster", game)
+        text = roster_message(self.contest_id, game, str(target["poem_room"]), int(target["room_generation"]),
                               members, rid)
         res = self._post(text)
         rec = self._await_receipt(rid, res.seq or self.cursor)
         if not rec or rec.get("status") != "accepted":
-            log.warning("%s: signature non confirmee (%s)", self.game_id, rec)
+            log.warning("%s: signature non confirmee (%s)", game, rec)
             return {"action": "sign-failed", "receipt": rec}
-        self.signed_members = members
-        log.info("%s: notre contre-signature est acceptee (roster_ready=%s)", self.game_id, rec.get("roster_ready"))
-        return {"action": "signed", "members": members, "roster_ready": rec.get("roster_ready")}
+        self.signed_members, self.signed_game = members, game
+        if self.hold_path:
+            from pathlib import Path
+            Path(self.hold_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.hold_path).write_text(json.dumps({"game": game, "members": members, "at": self.now()}), "utf-8")
+        log.info("%s: notre contre-signature est acceptee (roster_ready=%s)", game, rec.get("roster_ready"))
+        return {"action": "signed", "game": game, "members": members, "roster_ready": rec.get("roster_ready")}
 
     def run(self, stop=None, poll_seconds: float = 5, long_poll: int = 10) -> None:
-        log.info("%s: contre-signature automatique armee pour le lead ...%s (%s)", self.game_id, self.lead_did[-8:],
-                 "DRY-RUN" if self.dry_run else "LIVE")
+        log.info("%s: contre-signature automatique armee pour %d lead(s) (%s)", self.game_id or "tout jeu",
+                 len(self.leads), "DRY-RUN" if self.dry_run else "LIVE")
         while not (stop is not None and stop.is_set()):
             try:
                 out = self.step(wait=long_poll)
@@ -151,7 +181,7 @@ class CounterSigner:
             if out["action"] not in ("wait", "already-signed"):
                 log.info("%s: %s", self.game_id, json.dumps(out)[:300])
             if self.ready:
-                log.info("%s: roster pret ; la contre-signature automatique s'arrete", self.game_id)
+                log.info("%s: roster pret ; la contre-signature automatique s'arrete", self.signed_game or self.game_id)
                 return
             if out["action"] in ("error", "withdraw-failed", "sign-failed"):
                 self.sleep(60)

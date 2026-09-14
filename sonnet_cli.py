@@ -315,7 +315,8 @@ def cmd_manage(cfg, args) -> int:
     from technocore_agent.sonnet.watch import Archive
     m = manager.RosterManager(client, ident, cfg.referee_did, cfg.contest_id, args.game_id, cfg.rooms["discovery"],
                               room, generation, key, state_path=cfg.state_path.parent / f"sonnet_manager_{args.game_id}.json",
-                              rules=rules, dry_run=not live, archive=Archive(cfg.archive_dir))
+                              rules=rules, dry_run=not live, archive=Archive(cfg.archive_dir),
+                              hold_path=cfg.state_path.parent / "sonnet_hold.json")
     log.info("%s: gestionnaire de roster en mode %s (patience %d min, fenetre d'activite %d min, generation %s)",
              args.game_id, "LIVE" if live else "DRY-RUN", args.patience_min, args.active_min, generation)
     if args.once:
@@ -332,13 +333,24 @@ def cmd_countersign(cfg, args) -> int:
     live = bool(args.live)
     if live:
         _require_write(cfg, args, "la contre-signature automatique")
-    if not lexicon.ED25519_DID.fullmatch(args.lead):
-        raise ConfigError("--lead: DID did:key:z6Mk... attendu")
+    leads = set()
+    for item in args.lead:
+        for d in item.split(","):
+            d = d.strip()
+            if d and not lexicon.ED25519_DID.fullmatch(d):
+                raise ConfigError(f"--lead: DID did:key:z6Mk... attendu ({d[:20]}...)")
+            if d:
+                leads.add(d)
+    if not leads:
+        raise ConfigError("--lead: au moins un DID")
     _setup_logging(cfg, logging.DEBUG if args.verbose else logging.INFO)
     ident = _identity(cfg)
     from technocore_agent.sonnet.watch import Archive
-    cs = countersign.CounterSigner(TechnocoreClient(), ident, cfg.referee_did, cfg.contest_id, team.check_game_id(args.game_id),
-                                   args.lead, cfg.rooms["discovery"], dry_run=not live, archive=Archive(cfg.archive_dir))
+    game = None if args.game_id == "any" else team.check_game_id(args.game_id)
+    cs = countersign.CounterSigner(TechnocoreClient(), ident, cfg.referee_did, cfg.contest_id, game,
+                                   lead_dids=leads, discovery_room=cfg.rooms["discovery"], dry_run=not live,
+                                   archive=Archive(cfg.archive_dir), release_game=args.release_game,
+                                   hold_path=cfg.state_path.parent / "sonnet_hold.json")
     # depart : on ne relit pas tout l'historique, seulement ce qui arrive apres le lancement
     page = TechnocoreClient().read(cfg.rooms["discovery"], limit=1)
     cs.cursor = int(page.last_seq or 0) - int(args.lookback)
@@ -470,8 +482,9 @@ def main(argv=None) -> int:
     p.add_argument("--poll", type=float, default=60)
     p.add_argument("-v", "--verbose", action="store_true")
     p = sub.add_parser("countersign")
-    p.add_argument("game_id")
-    p.add_argument("--lead", required=True, help="DID du lead dont on accepte les rosters")
+    p.add_argument("game_id", help="game_id, ou 'any' pour tout jeu dont la room correspond")
+    p.add_argument("--lead", required=True, action="append", help="DID de lead autorise (repetable, ou liste separee par des virgules)")
+    p.add_argument("--release-game", default=None, help="notre propre equipe a liberer avant de signer ailleurs")
     p.add_argument("--live", action="store_true")
     p.add_argument("--yes", action="store_true")
     p.add_argument("--once", action="store_true")

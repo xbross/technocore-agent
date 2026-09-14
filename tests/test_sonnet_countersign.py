@@ -110,3 +110,32 @@ def test_a_roster_whose_signature_failed_is_not_retried_every_step(tmp_path):
     assert w.step()["action"] == "wait" and len(client.said) == 1  # pas de nouvelle tentative sur la meme liste
     client.add(lead, team.roster_message("sonnet-2", "h5", "d-sonnet-2-team-h5", 1, members, "l-1-repost"))
     assert w.step()["action"] == "wait" and len(client.said) == 1  # ni sur un repost identique
+
+
+def test_multiple_leads_any_game_and_release_of_our_own_team_first(tmp_path):
+    ref, me, lead, other, client = _setup(tmp_path)
+    lead2 = identity.create(tmp_path / "lead2.pem", "pw")
+    members = [lead2.did, me.did] + ["did:key:z6Mk" + c * 44 for c in "ab"]
+    client.add(lead2, team.roster_message("sonnet-2", "nohitori-3", "d-sonnet-2-team-nohitori-3", 2, members, "l2-1"))
+    hold = tmp_path / "hold.json"
+    w = countersign.CounterSigner(client, me, referee_did=ref.did, contest_id="sonnet-2", game_id=None,
+                                  lead_dids={lead.did, lead2.did}, discovery_room=DISC, dry_run=False,
+                                  release_game="rimbaud-gang", hold_path=hold, sleep=lambda s: None,
+                                  now=iter(range(0, 10000)).__next__)
+    out = w.step()
+    types = [json.loads(t)["type"] for t in client.said]
+    assert types == ["sonnet.withdraw.v1", "sonnet.roster.v1"]
+    assert json.loads(client.said[0])["game_id"] == "rimbaud-gang"
+    signed = json.loads(client.said[1])
+    assert signed["game_id"] == "nohitori-3" and signed["room_generation"] == 2 and out["action"] == "signed"
+    assert json.loads(hold.read_text())["game"] == "nohitori-3"
+
+
+def test_roster_from_unknown_lead_or_wrong_room_is_ignored(tmp_path):
+    ref, me, lead, other, client = _setup(tmp_path)
+    members = [other.did, me.did] + ["did:key:z6Mk" + c * 44 for c in "ab"]
+    client.add(other, team.roster_message("sonnet-2", "g1", "d-sonnet-2-team-g1", 1, members, "o-1"))
+    w = countersign.CounterSigner(client, me, referee_did=ref.did, contest_id="sonnet-2", game_id=None,
+                                  lead_dids={lead.did}, discovery_room=DISC, dry_run=False, sleep=lambda s: None,
+                                  now=iter(range(0, 10000)).__next__)
+    assert w.step()["action"] == "wait" and client.said == []

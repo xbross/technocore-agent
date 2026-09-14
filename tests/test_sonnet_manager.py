@@ -289,3 +289,18 @@ def test_deterministic_rejection_pauses_briefly_while_silence_pauses_long(tmp_pa
     assert out["pause_s"] <= 300 and m.state["failures"] == 0
     out = m._fail("withdraw-failed", None)
     assert out["pause_s"] >= 1800 and m.state["failures"] == 1
+
+
+def test_manager_stays_idle_while_a_hold_file_says_we_are_committed_elsewhere(tmp_path):
+    w = _world(tmp_path)
+    members = [w.me.did] + [w.person(n).did for n in "abc"]
+    w.roster(w.me, members, "xav-rg-roster-1", at=1000)
+    w.receipt("xav-rg-roster-1", w.me.did, roster_ready=False)
+    hold = tmp_path / "hold.json"
+    hold.write_text(json.dumps({"game": "elsewhere"}), "utf-8")
+    m = manager.RosterManager(FakeClient(w), w.me, referee_did=w.ref.did, contest_id="sonnet-2", game_id=GAME,
+                              discovery_room=DISC, poem_room=ROOM, generation=1, key_words=KEY,
+                              state_path=tmp_path / "m.json", rules=manager.Rules(patience_s=1, active_window_s=100000),
+                              dry_run=False, coverage_required=False, hold_path=hold, now=lambda: w.epoch(9000),
+                              sleep=lambda s: None)
+    assert m.run_once()["action"] == "hold"
