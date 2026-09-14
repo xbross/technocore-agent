@@ -61,3 +61,47 @@ def test_wait_for_roster_polls_until_ready_and_reports_list_changes(capsys):
     slept = []
     final = wait_for_roster(lambda: next(states), sleep=slept.append, poll_seconds=30)
     assert final["ready"] and len(slept) == 2 and slept == [30, 30]
+
+
+def test_roster_status_attributes_receipt_to_the_post_it_answers_when_request_id_is_reused(tmp_path):
+    """Bug de la nuit du 13/09 : meme request_id reutilise avec une autre liste -> l'ancien recu
+    ne doit pas etre attribue a la nouvelle liste."""
+    ref = identity.create(tmp_path / "ref.pem", "pw")
+    me = identity.create(tmp_path / "me.pem", "pw")
+    others = ["did:key:z6Mk" + c * 44 for c in "abcd"]
+    first = [me.did] + others[:3]
+    second = [me.did] + others[1:4]
+    receipt = json.dumps({"type": "sonnet.receipt.v1", "status": "accepted", "request_id": "r-2", "sender_did": me.did,
+                          "roster_ready": False})
+    msgs = [_msg(me, 1, team.roster_message("sonnet-2", "g", "d-sonnet-2-team-g", 1, first, "r-2"), 1),
+            _msg(ref, 2, receipt, 1),
+            _msg(me, 3, team.roster_message("sonnet-2", "g", "d-sonnet-2-team-g", 1, second, "r-2"), 2)]
+    st = roster_status(msgs, ROOM, ref.did, "g", me.did)
+    assert st["members"] == second and st["signed"] == []
+
+
+def test_roster_status_drops_consent_after_accepted_withdrawal(tmp_path):
+    ref = identity.create(tmp_path / "ref.pem", "pw")
+    me = identity.create(tmp_path / "me.pem", "pw")
+    members = [me.did] + ["did:key:z6Mk" + c * 44 for c in "abc"]
+    acc = lambda rid: json.dumps({"type": "sonnet.receipt.v1", "status": "accepted", "request_id": rid, "sender_did": me.did})
+    msgs = [_msg(me, 1, team.roster_message("sonnet-2", "g", "d-sonnet-2-team-g", 1, members, "r-1"), 1),
+            _msg(ref, 2, acc("r-1"), 1),
+            _msg(me, 3, team.withdraw_message("sonnet-2", "g", "wd-1"), 2),
+            _msg(ref, 4, acc("wd-1"), 2)]
+    st = roster_status(msgs, ROOM, ref.did, "g", me.did)
+    assert st["signed"] == [] and me.did in st["pending"]
+
+
+def test_wait_for_roster_survives_network_errors():
+    from technocore_agent.client import NetworkError
+    from technocore_agent.sonnet.roster import wait_for_roster
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        if len(calls) == 1:
+            raise NetworkError("boom")
+        return {"members": ["a"], "signed": ["a"], "pending": [], "ready": True, "roster_seq": 1}
+
+    assert wait_for_roster(fetch, sleep=lambda s: None, poll_seconds=1)["ready"]

@@ -188,3 +188,53 @@ def test_dry_run_plans_but_never_writes(tmp_path):
                               dry_run=True, coverage_required=False, now=lambda: w.epoch(5000), sleep=lambda s: None)
     outcome = m.run_once()
     assert client.said == [] and outcome["action"] == "planned" and outcome["new"] == cand.did
+
+
+def test_each_attempt_uses_a_fresh_request_id_and_failures_back_off(tmp_path):
+    """Bug de la nuit du 13/09 : meme request_id reposte 140 fois. Un echec => nouvel id, puis pause."""
+    w = _world(tmp_path)
+    p1, cand = w.person("p1"), w.person("cand")
+    members = [w.me.did, p1.did, w.person("x").did, w.person("y").did]
+    w.roster(w.me, members, "xav-rg-roster-1", at=1000)
+    w.receipt("xav-rg-roster-1", w.me.did, roster_ready=False)
+    w.post(cand, json.dumps({"type": "sonnet.application.v1", "game_id": GAME, "text": "yes-rg"}), at=1100)
+
+    class SilentClient(FakeClient):  # l'arbitre ne repond jamais
+        def say_signed(self, ident, room, text, nonce):
+            self.said.append((room, text))
+            return SayResult("", self.w.post(ident, text), True)
+
+    client = SilentClient(w)
+    clock = [w.epoch(5000)]
+
+    def sleep(s):  # l'horloge simulee avance quand on dort
+        clock[0] += s
+
+    m = manager.RosterManager(client, w.me, referee_did=w.ref.did, contest_id="sonnet-2", game_id=GAME,
+                              discovery_room=DISC, poem_room=ROOM, generation=1, key_words=KEY,
+                              state_path=tmp_path / "m.json",
+                              rules=manager.Rules(patience_s=100, active_window_s=100000, receipt_wait_s=1),
+                              dry_run=False, coverage_required=False, now=lambda: clock[0], sleep=sleep)
+    out1 = m.run_once()
+    assert out1["action"] == "withdraw-failed" and len(client.said) == 1
+    out2 = m.run_once()  # juste apres : en pause, aucune ecriture
+    assert out2["action"] == "backoff" and len(client.said) == 1
+    clock[0] += 3600  # la pause apres un premier echec est de 30 min
+    out3 = m.run_once()
+    assert out3["action"] == "withdraw-failed" and len(client.said) == 2
+    rids = [json.loads(t)["request_id"] for _, t in client.said]
+    assert rids[0] != rids[1]
+
+
+def test_await_receipt_understands_batch_receipts(tmp_path):
+    w = _world(tmp_path)
+    client = FakeClient(w)
+    m = manager.RosterManager(client, w.me, referee_did=w.ref.did, contest_id="sonnet-2", game_id=GAME,
+                              discovery_room=DISC, poem_room=ROOM, generation=1, key_words=KEY,
+                              state_path=tmp_path / "m.json", dry_run=False, now=lambda: w.epoch(100),
+                              sleep=lambda s: None)
+    batch = json.dumps({"type": "sonnet.receipts.v1", "status": "rejected", "reason": "request_id: reused",
+                        "receipts": [{"request_id": "rid-x", "sender_did": w.me.did}], "contest_id": "sonnet-2"})
+    w.post(w.ref, batch)
+    rec = m._await_receipt("rid-x", since=0)
+    assert rec["status"] == "rejected" and "reused" in rec["reason"]

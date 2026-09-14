@@ -177,7 +177,7 @@ class RosterManager:
         self.dry_run, self.coverage_required = dry_run, coverage_required
         self.now, self.sleep, self.archive = now, sleep, archive
         self.state_path = Path(state_path)
-        self.state = {"replacements": 0, "counter": 2, "history": []}
+        self.state = {"replacements": 0, "counter": 0, "history": [], "failures": 0, "next_attempt_at": 0.0}
         self._last_nonce = 0
         if self.state_path.exists():
             self.state.update(json.loads(self.state_path.read_text("utf-8")))
@@ -187,6 +187,19 @@ class RosterManager:
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.state, indent=1), "utf-8")
         os.replace(tmp, self.state_path)
+
+    def _rid(self, kind: str) -> str:
+        """request_id unique par tentative : un id reutilise avec un autre contenu est rejete sans recu."""
+        self.state["counter"] = int(self.state.get("counter", 0)) + 1
+        return f"xav-{self.game_id}-{kind}-{int(self.now() * 1000)}-{self.state['counter']}"
+
+    def _fail(self, action: str, receipt) -> dict:
+        self.state["failures"] = int(self.state.get("failures", 0)) + 1
+        pause = min(1800 * 2 ** (self.state["failures"] - 1), 6 * 3600)
+        self.state["next_attempt_at"] = self.now() + pause
+        self._save()
+        log.warning("%s: %s (%s) ; pause %d min avant nouvel essai", self.game_id, action, receipt, pause // 60)
+        return {"action": action, "receipt": receipt, "pause_s": pause}
 
     def _nonce(self) -> int:
         n = max(int(time.time() * 1000), self._last_nonce + 1)
@@ -209,6 +222,11 @@ class RosterManager:
                     if msg.sender != self.referee_did or classify(msg, self.discovery_room, self.referee_did) != "receipt":
                         continue
                     data = json.loads(msg.text)
+                    if data.get("type") == "sonnet.receipts.v1":  # recus groupes (souvent des rejets)
+                        for r in data.get("receipts", []):
+                            if isinstance(r, dict) and r.get("request_id") == request_id and r.get("sender_did") == self.ident.did:
+                                return {**r, "status": data.get("status"), "reason": data.get("reason", ""), "batch": True}
+                        continue
                     if data.get("request_id") == request_id and data.get("sender_did") == self.ident.did:
                         return data
                 if page.last_seq is not None:
@@ -241,6 +259,8 @@ class RosterManager:
         an = analyse(msgs, self.discovery_room, self.referee_did)
         act = decide(st, an, self.ident.did, self.game_id, self.key_words, self.now(), self.rules, posted_at,
                      self.coverage_required)
+        if act is None and self.ident.did not in st["signed"] and self.ident.did in st["members"]:
+            act = Replacement(old="", new="", members=list(st["members"]), reason="notre propre consentement manque")
         if act is None:
             return {"action": "wait", "signed": len(st["signed"]), "members": len(st["members"]),
                     "pending": [d[-8:] for d in st["pending"]]}
@@ -250,28 +270,30 @@ class RosterManager:
         if self.state["replacements"] >= self.rules.max_replacements:
             log.warning("%s: plafond de remplacements atteint", self.game_id)
             return {"action": "capped"}
-        n = self.state["counter"]
-        wd_rid = f"xav-{self.game_id}-wd-{n}"
-        res = self._post(withdraw_message(self.contest_id, self.game_id, wd_rid))
-        rec = self._await_receipt(wd_rid, res.seq)
-        if not rec or rec.get("status") != "accepted":
-            log.warning("%s: retrait non confirme (%s)", self.game_id, rec)
-            return {"action": "withdraw-failed", "receipt": rec}
-        roster_rid = f"xav-{self.game_id}-roster-{n}"
+        if self.now() < float(self.state.get("next_attempt_at", 0)):
+            return {"action": "backoff", "until": self.state["next_attempt_at"]}
+        if self.ident.did in st["signed"]:  # notre consentement est actif : le retirer d'abord
+            wd_rid = self._rid("wd")
+            res = self._post(withdraw_message(self.contest_id, self.game_id, wd_rid))
+            rec = self._await_receipt(wd_rid, res.seq)
+            if not rec or rec.get("status") != "accepted":
+                return self._fail("withdraw-failed", rec)
+        roster_rid = self._rid("roster")
         roster_text = roster_message(self.contest_id, self.game_id, self.poem_room, self.generation, act.members, roster_rid)
         res = self._post(roster_text)
         rec = self._await_receipt(roster_rid, res.seq)
         if not rec or rec.get("status") != "accepted":
-            log.warning("%s: nouvelle signature non confirmee (%s)", self.game_id, rec)
-            return {"action": "sign-failed", "receipt": rec}
-        note = self.invitation(act, roster_text)
-        refusal = check_reply(note)
-        if refusal:
-            log.warning("%s: invitation bloquee par le filtre (%s)", self.game_id, refusal)
-        else:
-            self._post(note)
-        self.state["replacements"] += 1
-        self.state["counter"] = n + 1
+            return self._fail("sign-failed", rec)
+        self.state["failures"] = 0
+        self.state["next_attempt_at"] = 0.0
+        if act.old:
+            note = self.invitation(act, roster_text)
+            refusal = check_reply(note)
+            if refusal:
+                log.warning("%s: invitation bloquee par le filtre (%s)", self.game_id, refusal)
+            else:
+                self._post(note)
+            self.state["replacements"] += 1
         self.state["history"].append({"at": self.now(), "old": act.old, "new": act.new, "reason": act.reason})
         self._save()
         return {"action": "replaced", "old": act.old, "new": act.new, "members": act.members}
