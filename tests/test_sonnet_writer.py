@@ -135,3 +135,33 @@ def test_run_dry_proposes_once_per_version_and_only_when_allowed(tmp_path):
     # v0 (apres setup) puis v1 (apres le mot de l'autre) : une proposition par version, jamais deux
     assert [json.loads(p["text"])["version"] for p in props] == [0, 1]
     assert client.said == []
+
+
+def test_script_mode_posts_only_the_assigned_word_at_its_version(tmp_path):
+    """Poeme pre-ecrit avec table de signataires : on ne joue que les versions qui nous sont assignees."""
+    client = FakeClient()
+    brain = PickBrain("ocean")  # ne doit jamais etre consulte en mode script
+    w, me = _writer(tmp_path, client, brain, dry_run=False)
+    w.playable = {"moon": 1, "ocean": 2, "soon": 1}
+    w.script = {3: "moon", 7: "soon"}
+    st = _state(last="did:key:z6MkX", syllables=1)  # version 3 : a nous
+    prop = w.turn(st)
+    assert prop is not None and json.loads(prop.text)["word"] == "moon" and brain.calls == []
+    st.version, st.state_hash = 4, "h4"  # version 4 : pas a nous
+    assert w.turn(st) is None and len(client.said) == 1
+
+
+def test_script_word_must_still_pass_the_official_validator(tmp_path):
+    client = FakeClient()
+    w, me = _writer(tmp_path, client, PickBrain("x"), dry_run=False)
+    w.script = {3: "the"}  # 't' absent de notre alphabet : le validateur officiel refuse
+
+    def validate(word, did):
+        raise ValueError("word: letters absent from contributor DID: t")
+
+    w.official_validate = validate
+    st = _state(last="did:key:z6MkX", syllables=1)
+    import pytest
+    with pytest.raises(ValueError):
+        w.turn(st)
+    assert client.said == []

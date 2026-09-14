@@ -102,7 +102,10 @@ class Writer:
     def __init__(self, client, ident: Identity, contest_id: str, referee_did: str, playable: dict[str, int],
                  prons: dict[str, list[str]], brain, archive_dir: Path, dry_run: bool = True,
                  max_words_per_poem: int = 60, shortlist_size: int = 40,
-                 official_validate: Callable[[str, str], int] | None = None):
+                 official_validate: Callable[[str, str], int] | None = None,
+                 script: dict[int, str] | None = None):
+        """script : {version: mot} d'un poeme pre-ecrit avec table de signataires. En mode script, le
+        joueur ne poste que le mot assigne a sa version, jamais autre chose, et n'appelle pas le modele."""
         self.client = client
         self.ident = ident
         self.contest_id = contest_id
@@ -115,6 +118,7 @@ class Writer:
         self.max_words_per_poem = max_words_per_poem
         self.shortlist_size = shortlist_size
         self.official_validate = official_validate
+        self.script = script
         self.words_proposed = 0
         self.proposals: dict[tuple[str, str], str] = {}
 
@@ -138,20 +142,25 @@ class Writer:
             log.warning("%s: plafond de %d propositions atteint", state.game_id, self.max_words_per_poem)
             return None
         lines = state.lines()
-        cands = candidates(lines, self.playable, self.prons, syllables_in_line=state.syllables % 10)
-        if not cands:
-            log.warning("%s: aucun mot jouable pour cet etat (reste %d syllabes)", state.game_id, state.remaining)
-            return None
-        shortlist = rank(cands)[: self.shortlist_size]
-        ctx = self.context(state, lines)
-        answer = self.brain.choose(ctx, shortlist)
-        word = answer or ""
-        base = strip_word(word)
-        if base not in cands or (word[len(base):] and (len(word) - len(base) > 1 or word[-1] not in PUNCT)):
-            log.warning("%s: reponse hors liste %r, repli sur %r", state.game_id, answer, shortlist[0])
-            word = shortlist[0]
-        if word.lower() != word and strip_word(word) in cands:
-            pass  # la casse est libre pour le validateur ; on garde celle du modele
+        if self.script is not None:
+            word = self.script.get(state.version)
+            if word is None:
+                return None  # cette version n'est pas a nous
+            answer, shortlist, ctx = word, [word], {"script": True, "version": state.version}
+            log.info("%s: mode script, version %d -> %r", state.game_id, state.version, word)
+        else:
+            cands = candidates(lines, self.playable, self.prons, syllables_in_line=state.syllables % 10)
+            if not cands:
+                log.warning("%s: aucun mot jouable pour cet etat (reste %d syllabes)", state.game_id, state.remaining)
+                return None
+            shortlist = rank(cands)[: self.shortlist_size]
+            ctx = self.context(state, lines)
+            answer = self.brain.choose(ctx, shortlist)
+            word = answer or ""
+            base = strip_word(word)
+            if base not in cands or (word[len(base):] and (len(word) - len(base) > 1 or word[-1] not in PUNCT)):
+                log.warning("%s: reponse hors liste %r, repli sur %r", state.game_id, answer, shortlist[0])
+                word = shortlist[0]
         if self.official_validate is not None:
             self.official_validate(word, self.ident.did)  # leve ValueError si le validateur officiel refuse
         rid = f"xav-{state.game_id}-v{state.version}-{int(time.time() * 1000)}"

@@ -287,11 +287,17 @@ def cmd_play(cfg, args) -> int:
     _print_state(st)
     playable = lexicon.playable_words(lex, lexicon.did_alphabet(ident.did))
     validator = package.load_validator(cfg.package_dir, cfg.package_sha256)
-    brain = writer.HeuristicBrain() if args.no_model else _brain(cfg)
+    script = None
+    if args.script:
+        raw = json.loads(Path(args.script).read_text("utf-8"))
+        script = {int(k): str(v) for k, v in raw.items()}
+        log.info("%s: mode SCRIPT, %d versions assignees : %s", args.game_id, len(script),
+                 " ".join(f"{k}:{v}" for k, v in sorted(script.items())[:12]))
+    brain = writer.HeuristicBrain() if (args.no_model or script) else _brain(cfg)
     w = writer.Writer(client, ident, cfg.contest_id, cfg.referee_did, playable, prons, brain,
                       archive_dir=cfg.archive_dir, dry_run=not live,
                       max_words_per_poem=int(cfg.extra.get("brain", {}).get("max_words_per_poem", 60)),
-                      official_validate=lambda word, did: validator.validate_word(word, did, lex))
+                      official_validate=lambda word, did: validator.validate_word(word, did, lex), script=script)
     log.info("%s: mode %s, modele %s", args.game_id, "LIVE" if live else "DRY-RUN", "aucun" if args.no_model else cfg.model)
     w.run(st, stop=stop, max_steps=args.steps)
     _print_state(st)
@@ -472,6 +478,7 @@ def main(argv=None) -> int:
     p.add_argument("--no-model", action="store_true", help="choix heuristique sans appel de modele")
     p.add_argument("--steps", type=int, default=None, help="nombre de lectures max (defaut: infini)")
     p.add_argument("--wait-roster", action="store_true", help="attendre le recu roster_ready de l'arbitre avant de jouer")
+    p.add_argument("--script", default=None, help="fichier JSON {version: mot} d'un poeme pre-ecrit : ne poster que nos mots assignes")
     p.add_argument("-v", "--verbose", action="store_true")
     p = sub.add_parser("manage")
     p.add_argument("game_id")
