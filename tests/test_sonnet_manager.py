@@ -238,3 +238,43 @@ def test_await_receipt_understands_batch_receipts(tmp_path):
     w.post(w.ref, batch)
     rec = m._await_receipt("rid-x", since=0)
     assert rec["status"] == "rejected" and "reused" in rec["reason"]
+
+
+def test_member_causing_frozen_or_unregistered_rejection_is_blacklisted_and_replaced(tmp_path):
+    """14/09 13:55Z : notre signature rejetee 'roster: member already frozen' a cause du nouveau membre ;
+    il ne doit plus jamais etre choisi, et doit etre remplace au tour suivant."""
+    w = _world(tmp_path)
+    p1, bad, good = w.person("p1"), w.person("bad"), w.person("good")
+    members = [w.me.did, p1.did, w.person("x").did, w.person("y").did]
+    w.roster(w.me, members, "xav-rg-roster-1", at=1000)
+    w.receipt("xav-rg-roster-1", w.me.did, roster_ready=False)
+    w.post(bad, json.dumps({"type": "sonnet.application.v1", "game_id": GAME, "text": "yes-rg"}), at=1200)
+    w.post(good, json.dumps({"type": "sonnet.application.v1", "game_id": GAME, "text": "yes-rg"}), at=1100)
+
+    class FrozenClient(FakeClient):
+        def say_signed(self, ident, room, text, nonce):
+            self.said.append((room, text))
+            seq = self.w.post(ident, text)
+            if not text.startswith("{"):
+                return SayResult("", seq, True)
+            data = json.loads(text)
+            if data["type"] == "sonnet.roster.v1" and bad.did in data["members"]:
+                self.w.receipt(data["request_id"], ident.did, status="rejected", reason="roster: member already frozen")
+            elif data["type"] in ("sonnet.withdraw.v1", "sonnet.roster.v1"):
+                self.w.receipt(data["request_id"], ident.did, roster_ready=False)
+            return SayResult("", seq, True)
+
+    client = FrozenClient(w)
+    clock = [w.epoch(5000)]
+    m = manager.RosterManager(client, w.me, referee_did=w.ref.did, contest_id="sonnet-2", game_id=GAME,
+                              discovery_room=DISC, poem_room=ROOM, generation=1, key_words=KEY,
+                              state_path=tmp_path / "m.json", rules=manager.Rules(patience_s=100, active_window_s=100000),
+                              dry_run=False, coverage_required=False, now=lambda: clock[0],
+                              sleep=lambda s: clock.__setitem__(0, clock[0] + s))
+    out = m.run_once()  # remplace p1 par bad (le plus recent) -> rejet frozen
+    assert out["action"] == "sign-failed" and bad.did in json.loads((tmp_path / "m.json").read_text())["blacklist"]
+    clock[0] += 4000  # fin de pause
+    out = m.run_once()  # bad est en liste noire : remplace par good, sans nouveau retrait (nous ne sommes plus signataire)
+    assert out["action"] == "replaced" and out["new"] == good.did and bad.did not in out["members"]
+    types = [json.loads(t)["type"] for _, t in client.said if t.startswith("{")]
+    assert types.count("sonnet.withdraw.v1") == 1

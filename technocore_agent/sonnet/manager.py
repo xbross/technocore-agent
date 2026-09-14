@@ -141,23 +141,26 @@ class Replacement:
 
 
 def decide(status: dict, an: dict[str, Profile], me: str, game_id: str, key_words: dict, now: float,
-           rules: Rules, posted_at: float, coverage_required: bool = True) -> Replacement | None:
+           rules: Rules, posted_at: float, coverage_required: bool = True,
+           blacklist: set[str] | frozenset[str] = frozenset()) -> Replacement | None:
     if status.get("ready") or not status.get("members"):
         return None
     members = list(status["members"])
     pending = [d for d in status.get("pending", []) if d != me]
     if not pending:
         return None
-    locked = [d for d in pending if d in an and game_id in an[d].rejected_on and not an[d].free_by_withdraw]
+    locked = [d for d in pending if d in blacklist] + \
+             [d for d in pending if d not in blacklist and d in an and game_id in an[d].rejected_on and not an[d].free_by_withdraw]
     if locked:
-        old, reason = locked[0], f"signature rejetee: {an[locked[0]].rejected_on[game_id]}"
+        old = locked[0]
+        reason = "membre en liste noire (gele ou non inscrit)" if old in blacklist else f"signature rejetee: {an[old].rejected_on[game_id]}"
     elif now - posted_at >= rules.patience_s:
         old, reason = pending[0], f"pas de signature depuis {int((now - posted_at) // 60)} min"
     else:
         return None
     staying = [d for d in members if d != old]
     cands = [d for d in pick_candidates(an, me, staying, game_id, key_words, now, rules, coverage_required)
-             if d not in pending]
+             if d not in pending and d not in blacklist]
     if not cands:
         return None
     new = cands[0]
@@ -177,7 +180,7 @@ class RosterManager:
         self.dry_run, self.coverage_required = dry_run, coverage_required
         self.now, self.sleep, self.archive = now, sleep, archive
         self.state_path = Path(state_path)
-        self.state = {"replacements": 0, "counter": 0, "history": [], "failures": 0, "next_attempt_at": 0.0}
+        self.state = {"replacements": 0, "counter": 0, "history": [], "failures": 0, "next_attempt_at": 0.0, "blacklist": []}
         self._last_nonce = 0
         if self.state_path.exists():
             self.state.update(json.loads(self.state_path.read_text("utf-8")))
@@ -258,7 +261,7 @@ class RosterManager:
         posted_at = parse_ts(posted[0].ts) if posted and posted[0].ts else self.now()
         an = analyse(msgs, self.discovery_room, self.referee_did)
         act = decide(st, an, self.ident.did, self.game_id, self.key_words, self.now(), self.rules, posted_at,
-                     self.coverage_required)
+                     self.coverage_required, blacklist=set(self.state.get("blacklist", [])))
         if act is None and self.ident.did not in st["signed"] and self.ident.did in st["members"]:
             act = Replacement(old="", new="", members=list(st["members"]), reason="notre propre consentement manque")
         if act is None:
@@ -283,6 +286,12 @@ class RosterManager:
         res = self._post(roster_text)
         rec = self._await_receipt(roster_rid, res.seq)
         if not rec or rec.get("status") != "accepted":
+            reason = str((rec or {}).get("reason", ""))
+            if act.new and ("frozen" in reason or "unregistered" in reason):
+                bl = set(self.state.get("blacklist", []))
+                bl.add(act.new)
+                self.state["blacklist"] = sorted(bl)
+                log.warning("%s: ...%s mis en liste noire (%s)", self.game_id, act.new[-8:], reason)
             return self._fail("sign-failed", rec)
         self.state["failures"] = 0
         self.state["next_attempt_at"] = 0.0
