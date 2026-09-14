@@ -23,6 +23,7 @@ class State:
     blocked: dict[str, dict] = field(default_factory=dict)  # did -> {"reason", "at"}
     refusals: dict[str, int] = field(default_factory=dict)  # did -> reponses refusees par le filtre
     mailbox: str | None = None  # nom de la room boite aux lettres (mb-p-...)
+    note_written_at: float | None = None  # derniere ecriture de la note DID (les notes inactives 7 j sont reclamees)
 
     @classmethod
     def load(cls, path: Path) -> "State":
@@ -38,13 +39,15 @@ class State:
             blocked=dict(data.get("blocked", {})),
             refusals={k: int(v) for k, v in data.get("refusals", {}).items()},
             mailbox=data.get("mailbox"),
+            note_written_at=float(data["note_written_at"]) if data.get("note_written_at") is not None else None,
         )
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         payload = {"cursors": self.cursors, "nonces": self.nonces, "recent_replies": self.recent_replies[-500:],
-                   "blocked": self.blocked, "refusals": self.refusals, "mailbox": self.mailbox}
+                   "blocked": self.blocked, "refusals": self.refusals, "mailbox": self.mailbox,
+                   "note_written_at": self.note_written_at}
         tmp.write_text(json.dumps(payload, indent=1, sort_keys=True), "utf-8")
         os.replace(tmp, self.path)
 

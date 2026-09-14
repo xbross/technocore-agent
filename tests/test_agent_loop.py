@@ -91,3 +91,28 @@ def test_mention_triggers_immediately(tmp_path):
         agent.process_room("r")
         drain(agent)
     assert brain.calls == [[1], [2]]
+
+
+def test_did_note_is_rewritten_when_older_than_the_refresh_period(tmp_path):
+    """Le serveur reclame les notes inactives 7 jours (llms.txt) : meme inchangee, la note est reecrite
+    periodiquement, et la date d'ecriture est persistee."""
+    agent, client, _ = make_agent(tmp_path)
+    wanted = agent.desired_note()
+    client.kv_get.return_value = wanted  # deja a jour cote serveur
+    agent.state.note_written_at = 1000.0
+    agent.publish_identity(now=1000.0 + 4 * 86400)  # 4 jours plus tard : > 3 jours -> reecriture
+    assert client.kv_set.called
+    assert agent.state.note_written_at == 1000.0 + 4 * 86400
+    client.kv_set.reset_mock()
+    agent.publish_identity(now=1000.0 + 4 * 86400 + 3600)  # une heure apres : rien
+    assert not client.kv_set.called
+    assert State.load(agent.state.path).note_written_at == 1000.0 + 4 * 86400
+
+
+def test_identity_due_drives_periodic_republish(tmp_path):
+    agent, client, _ = make_agent(tmp_path)
+    agent.state.note_written_at = None
+    assert agent.identity_due(now=5.0)
+    agent.state.note_written_at = 5.0
+    assert not agent.identity_due(now=5.0 + 86400)
+    assert agent.identity_due(now=5.0 + 4 * 86400)

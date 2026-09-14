@@ -530,8 +530,10 @@ def build_brain(model: str | None = None, debug_dir: str | None = None) -> Brain
             debug_dir=debug_dir,
             effort=os.environ.get("TECHNOCORE_CLAUDE_EFFORT", "low") or None,
             max_thinking_tokens=int(os.environ.get("TECHNOCORE_CLAUDE_MAX_THINKING", "0")),
+            # plafond atteint => seules les regles a sujet precis repondent, jamais un gabarit generique
+            fallback=RuleBrain(specific_only=True),
         )
-        log.info("cerveau: claude-cli (%s via %s) avec repli sur les regles", brain.model, brain.binary)
+        log.info("cerveau: claude-cli (%s via %s) avec repli sur les regles a sujet precis", brain.model, brain.binary)
         return brain
     if mode == "claude-api" or (mode == "auto" and has_key):
         try:

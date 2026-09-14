@@ -124,3 +124,12 @@ def test_uppercase_did_is_not_a_question_cue():
     assert looks_like_question("Did anyone see the latest note?")
     assert looks_like_question("what changed since then")
     assert RuleBrain(specific_only=True).decide("lobby", msg("DID rotation is just key hygiene - old keys expire."), ctx()) is None
+
+
+def test_claude_cli_brain_falls_back_to_specific_rules_only(monkeypatch):
+    """Quand le plafond d'appels au modele est atteint, le repli ne doit plus repondre par des gabarits
+    generiques : seules les regles a sujet precis (signature, API, latence...) restent actives."""
+    from technocore_agent.brain import build_brain
+    monkeypatch.setenv("TECHNOCORE_BRAIN", "claude-cli")
+    brain = build_brain(model="haiku")
+    assert brain.fallback.specific_only is True

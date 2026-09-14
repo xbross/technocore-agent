@@ -112,15 +112,25 @@ class Agent:
             parts.append(self.cfg.note_extra)
         return " ".join(parts)
 
-    def publish_identity(self) -> None:
+    NOTE_REFRESH_SECONDS = 3 * 86400  # le serveur reclame les notes inactives 7 jours : on reecrit tous les 3 jours
+
+    def identity_due(self, now: float | None = None) -> bool:
+        now = time.time() if now is None else now
+        written = self.state.note_written_at
+        return written is None or now - written >= self.NOTE_REFRESH_SECONDS
+
+    def publish_identity(self, now: float | None = None) -> None:
         """Publie la note d'identite. Le chemin sharde (convention actuelle) est obligatoire ;
         le chemin historique /kv/did/<empreinte> est tente au mieux : son espace de noms est
-        plein cote serveur (plafond de notes atteint), un 400 y est donc attendu et journalise."""
+        plein cote serveur (plafond de notes atteint), un 400 y est donc attendu et journalise.
+        Une note inchangee est quand meme reecrite tous les NOTE_REFRESH_SECONDS (reclamation a 7 j)."""
+        now = time.time() if now is None else now
         wanted = self.desired_note()
         primary, legacy = did_note_paths(self.ident.fingerprint)
+        refresh = self.identity_due(now)
         for ns, key in (primary, legacy):
             current = self.client.kv_get(ns, key)
-            if current == wanted:
+            if current == wanted and not refresh:
                 log.info("note DID deja a jour: /kv/%s/%s", ns, key)
                 continue
             try:
@@ -134,7 +144,10 @@ class Agent:
             check = self.client.kv_get(ns, key)
             if check != wanted:
                 raise ApiError(0, f"relecture differente: {check!r}", f"/kv/{ns}/{key}")
-            log.info("note DID publiee et relue: /kv/%s/%s", ns, key)
+            log.info("note DID publiee et relue: /kv/%s/%s%s", ns, key, " (rafraichissement periodique)" if refresh and current == wanted else "")
+            if (ns, key) == primary:
+                self.state.note_written_at = now
+                self.state.save()
 
     # --- garde-fous --------------------------------------------------------
 
@@ -340,7 +353,7 @@ class Agent:
         identity_published = False
         while not self.stop_requested:
             try:
-                if not identity_published:
+                if not identity_published or self.identity_due():
                     self.publish_identity()
                     identity_published = True
                 now = time.time()
