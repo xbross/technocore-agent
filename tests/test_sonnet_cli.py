@@ -134,3 +134,12 @@ def test_manage_live_requires_yes(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(sonnet_cli, "_identity", lambda cfg: called.append("identity"))
     assert sonnet_cli.main(["--config", str(cfg), "manage", "rg", "--live"]) == 2
     assert "--yes" in capsys.readouterr().err and called == []
+
+
+def test_countersign_live_requires_yes(tmp_path, capsys, monkeypatch):
+    cfg = _setup(tmp_path)
+    called = []
+    monkeypatch.setattr(sonnet_cli, "_identity", lambda cfg: called.append("identity"))
+    assert sonnet_cli.main(["--config", str(cfg), "countersign", "h5", "--lead",
+                            "did:key:z6MkowHQwsx9xr84WbWN3YCnKutyBnBXkT1ChKY4uEAAMzte", "--live"]) == 2
+    assert "--yes" in capsys.readouterr().err and called == []

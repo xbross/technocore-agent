@@ -15,6 +15,8 @@
   submit-prep GAME_ID texte canonique, sha256 et paquet de soumission (sans x_post_ids) - lecture
   manage GAME_ID      gestionnaire de roster (lead) : remplace les sieges qui ne signent pas ;
                       dry-run par defaut, --live --yes pour ecrire (retrait, re-signature, invitation)
+  countersign GAME_ID --lead DID   contre-signe automatiquement le roster de CE lead pour CE jeu
+                      s'il nous nomme (4-8 membres) ; dry-run par defaut, --live --yes pour ecrire
   team-request/roster-sign/withdraw/say  (ECRITURE, --yes + armed) messages de formation d'equipe
 
 Toute ecriture exige participant.armed = true dans sonnet.toml ET --yes sur la ligne de commande.
@@ -32,7 +34,7 @@ from pathlib import Path
 
 from technocore_agent import identity
 from technocore_agent.client import TechnocoreClient
-from technocore_agent.sonnet import lexicon, manager, package, poem, register, team, writer
+from technocore_agent.sonnet import countersign, lexicon, manager, package, poem, register, team, writer
 from technocore_agent.sonnet.roster import roster_status, wait_for_roster
 from technocore_agent.sonnet.config import ConfigError, SonnetConfig
 from technocore_agent.sonnet.watch import SonnetWatcher
@@ -326,6 +328,30 @@ def cmd_manage(cfg, args) -> int:
     return 0
 
 
+def cmd_countersign(cfg, args) -> int:
+    live = bool(args.live)
+    if live:
+        _require_write(cfg, args, "la contre-signature automatique")
+    if not lexicon.ED25519_DID.fullmatch(args.lead):
+        raise ConfigError("--lead: DID did:key:z6Mk... attendu")
+    _setup_logging(cfg, logging.DEBUG if args.verbose else logging.INFO)
+    ident = _identity(cfg)
+    from technocore_agent.sonnet.watch import Archive
+    cs = countersign.CounterSigner(TechnocoreClient(), ident, cfg.referee_did, cfg.contest_id, team.check_game_id(args.game_id),
+                                   args.lead, cfg.rooms["discovery"], dry_run=not live, archive=Archive(cfg.archive_dir))
+    # depart : on ne relit pas tout l'historique, seulement ce qui arrive apres le lancement
+    page = TechnocoreClient().read(cfg.rooms["discovery"], limit=1)
+    cs.cursor = int(page.last_seq or 0) - int(args.lookback)
+    if args.once:
+        print(json.dumps(cs.step(), indent=1))
+        return 0
+    stop = threading.Event()
+    for s_ in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(s_, lambda *_: stop.set())
+    cs.run(stop)
+    return 0
+
+
 def _post(cfg, ident, room: str, text: str) -> int:
     client = TechnocoreClient()
     res = client.say_signed(ident, room, text, int(__import__("time").time() * 1000))
@@ -443,6 +469,14 @@ def main(argv=None) -> int:
     p.add_argument("--max-replacements", type=int, default=12)
     p.add_argument("--poll", type=float, default=60)
     p.add_argument("-v", "--verbose", action="store_true")
+    p = sub.add_parser("countersign")
+    p.add_argument("game_id")
+    p.add_argument("--lead", required=True, help="DID du lead dont on accepte les rosters")
+    p.add_argument("--live", action="store_true")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--lookback", type=int, default=200, help="nb de lignes recentes a relire au demarrage")
+    p.add_argument("-v", "--verbose", action="store_true")
     for name in ("team-request", "withdraw"):
         p = sub.add_parser(name)
         p.add_argument("game_id")
@@ -467,7 +501,7 @@ def main(argv=None) -> int:
                 "register": cmd_register, "poem-state": cmd_poem_state, "submit-prep": cmd_submit_prep,
                 "roster-status": cmd_roster_status,
                 "play": cmd_play, "team-request": cmd_team_request, "roster-sign": cmd_roster_sign,
-                "withdraw": cmd_withdraw, "say": cmd_say, "manage": cmd_manage}
+                "withdraw": cmd_withdraw, "say": cmd_say, "manage": cmd_manage, "countersign": cmd_countersign}
     try:
         cfg = SonnetConfig.load(Path(args.config))
         return handlers[args.cmd](cfg, args)
