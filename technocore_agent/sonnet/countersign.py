@@ -25,7 +25,7 @@ class CounterSigner:
                  lead_did: str | None = None, discovery_room: str = "mb-sonnet-2-discovery", dry_run: bool = True,
                  receipt_wait_s: float = 120, now: Callable[[], float] = time.time,
                  sleep: Callable[[float], None] = time.sleep, archive=None, lead_dids: set[str] | None = None,
-                 release_game: str | None = None, hold_path=None):
+                 release_game: str | None = None, hold_path=None, policy: Callable | None = None):
         """game_id=None : n'importe quel jeu (la room doit correspondre au game_id du roster).
         lead_dids : ensemble des leads acceptes (lead_did reste accepte pour compatibilite).
         release_game : notre propre equipe, dont on libere le consentement avant de signer ailleurs.
@@ -37,6 +37,7 @@ class CounterSigner:
         self.room, self.dry_run, self.receipt_wait_s = discovery_room, dry_run, receipt_wait_s
         self.now, self.sleep, self.archive = now, sleep, archive
         self.release_game, self.hold_path = release_game, hold_path
+        self.policy = policy  # fonction (msg, data) -> bool, evaluee si l'expediteur n'est pas dans la liste blanche
         self.cursor = 0
         self.signed_game: str | None = None
         self.signed_members: list[str] | None = None
@@ -66,13 +67,15 @@ class CounterSigner:
 
     def acceptable(self, msg) -> dict | None:
         """Le roster du lead qui nous nomme, ou None."""
-        if msg.sender not in self.leads or not msg.signed:
+        if not msg.signed or msg.sender == self.referee_did:
             return None
         try:
             data = json.loads(msg.text)
         except ValueError:
             return None
         if not isinstance(data, dict) or data.get("type") != "sonnet.roster.v1":
+            return None
+        if msg.sender not in self.leads and not (self.policy is not None and self.policy(msg, data)):
             return None
         game = data.get("game_id")
         if not isinstance(game, str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,15}$", game):

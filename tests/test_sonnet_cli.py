@@ -152,3 +152,11 @@ def test_say_allows_our_own_registered_x_url_but_no_other_link(tmp_path, capsys,
     monkeypatch.setattr(sonnet_cli, "_identity", lambda cfg: None)
     assert sonnet_cli.main(["--config", str(cfg), "say", "mb-sonnet-2-discovery", "my account is https://x.com/rektbycryptos", "--yes", "--dry-run"]) == 0
     assert sonnet_cli.main(["--config", str(cfg), "say", "mb-sonnet-2-discovery", "see https://x.com/someone_else", "--yes", "--dry-run"]) == 2
+
+
+def test_sniper_live_requires_yes(tmp_path, capsys, monkeypatch):
+    cfg = _setup(tmp_path)
+    called = []
+    monkeypatch.setattr(sonnet_cli, "_identity", lambda cfg: called.append("identity"))
+    assert sonnet_cli.main(["--config", str(cfg), "sniper", "--live"]) == 2
+    assert "--yes" in capsys.readouterr().err and called == []

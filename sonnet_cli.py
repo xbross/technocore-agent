@@ -17,6 +17,8 @@
                       dry-run par defaut, --live --yes pour ecrire (retrait, re-signature, invitation)
   countersign GAME_ID --lead DID   contre-signe automatiquement le roster de CE lead pour CE jeu
                       s'il nous nomme (4-8 membres) ; dry-run par defaut, --live --yes pour ecrire
+  sniper              candidate une fois aux equipes reelles (>= 2 consentements acceptes) qui ont
+                      un siege muet, et contresigne si un signataire accepte nous nomme ; --live --yes
   team-request/roster-sign/withdraw/say  (ECRITURE, --yes + armed) messages de formation d'equipe
 
 Toute ecriture exige participant.armed = true dans sonnet.toml ET --yes sur la ligne de commande.
@@ -29,12 +31,13 @@ import logging
 import signal
 import sys
 import threading
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from technocore_agent import identity
-from technocore_agent.client import TechnocoreClient
-from technocore_agent.sonnet import countersign, lexicon, manager, package, poem, register, team, writer
+from technocore_agent.client import ApiError, NetworkError, RateLimited, TechnocoreClient
+from technocore_agent.sonnet import countersign, lexicon, manager, package, poem, register, sniper, team, writer
 from technocore_agent.sonnet.roster import roster_status, wait_for_roster
 from technocore_agent.sonnet.config import ConfigError, SonnetConfig
 from technocore_agent.sonnet.watch import SonnetWatcher
@@ -370,6 +373,54 @@ def cmd_countersign(cfg, args) -> int:
     return 0
 
 
+def cmd_sniper(cfg, args) -> int:
+    live = bool(args.live)
+    if live:
+        _require_write(cfg, args, "le sniper")
+    _setup_logging(cfg, logging.DEBUG if args.verbose else logging.INFO)
+    ident = _identity(cfg)
+    client = TechnocoreClient()
+    from technocore_agent.sonnet.watch import Archive
+    archive = Archive(cfg.archive_dir)
+    letters = "".join(sorted(lexicon.did_alphabet(ident.did)))
+    sn = sniper.Sniper(client, ident, cfg.referee_did, cfg.contest_id, cfg.rooms["discovery"],
+                       state_path=cfg.state_path.parent / "sonnet_sniper.json", dry_run=not live,
+                       registration_seq=args.registration_seq, letters=letters, max_per_hour=args.max_per_hour,
+                       min_core=args.min_core, silent_s=args.silent_min * 60, archive=archive)
+    cs = countersign.CounterSigner(client, ident, cfg.referee_did, cfg.contest_id, None, lead_dids=set(),
+                                   discovery_room=cfg.rooms["discovery"], dry_run=not live, archive=archive,
+                                   release_game=args.release_game, hold_path=cfg.state_path.parent / "sonnet_hold.json",
+                                   policy=lambda msg, data: sniper.core_policy(sn.cores, args.min_core)(msg, data))
+    page = client.read(cfg.rooms["discovery"], limit=1)
+    cs.cursor = int(page.last_seq or 0)
+    if args.once:
+        print(json.dumps(sn.run_once(), indent=1))
+        return 0
+    stop = threading.Event()
+    for s_ in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(s_, lambda *_: stop.set())
+    log.info("sniper %s : coeur >= %d, silence >= %d min, max %d candidatures/h", "LIVE" if live else "DRY-RUN",
+             args.min_core, args.silent_min, args.max_per_hour)
+    last_scan = 0.0
+    while not stop.is_set():
+        try:
+            if time.time() - last_scan >= args.scan_seconds:
+                out = sn.run_once()
+                last_scan = time.time()
+                if out["applied"]:
+                    log.info("sniper: %s", json.dumps(out))
+            out = cs.step(wait=10)
+            if out["action"] not in ("wait", "already-signed"):
+                log.info("contre-signature: %s", json.dumps(out)[:300])
+            if cs.ready:
+                log.info("roster pret sur %s ; le sniper s'arrete", cs.signed_game)
+                return 0
+        except (NetworkError, ApiError, RateLimited) as e:
+            log.warning("sniper: %s", e)
+            stop.wait(30)
+    return 0
+
+
 def _post(cfg, ident, room: str, text: str) -> int:
     client = TechnocoreClient()
     res = client.say_signed(ident, room, text, int(__import__("time").time() * 1000))
@@ -499,6 +550,17 @@ def main(argv=None) -> int:
     p.add_argument("--once", action="store_true")
     p.add_argument("--lookback", type=int, default=200, help="nb de lignes recentes a relire au demarrage")
     p.add_argument("-v", "--verbose", action="store_true")
+    p = sub.add_parser("sniper")
+    p.add_argument("--live", action="store_true")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--registration-seq", type=int, default=127300)
+    p.add_argument("--max-per-hour", type=int, default=2)
+    p.add_argument("--min-core", type=int, default=2)
+    p.add_argument("--silent-min", type=float, default=30)
+    p.add_argument("--scan-seconds", type=float, default=120)
+    p.add_argument("--release-game", default="rimbaud-gang")
+    p.add_argument("-v", "--verbose", action="store_true")
     for name in ("team-request", "withdraw"):
         p = sub.add_parser(name)
         p.add_argument("game_id")
@@ -523,7 +585,8 @@ def main(argv=None) -> int:
                 "register": cmd_register, "poem-state": cmd_poem_state, "submit-prep": cmd_submit_prep,
                 "roster-status": cmd_roster_status,
                 "play": cmd_play, "team-request": cmd_team_request, "roster-sign": cmd_roster_sign,
-                "withdraw": cmd_withdraw, "say": cmd_say, "manage": cmd_manage, "countersign": cmd_countersign}
+                "withdraw": cmd_withdraw, "say": cmd_say, "manage": cmd_manage, "countersign": cmd_countersign,
+                "sniper": cmd_sniper}
     try:
         cfg = SonnetConfig.load(Path(args.config))
         return handlers[args.cmd](cfg, args)
