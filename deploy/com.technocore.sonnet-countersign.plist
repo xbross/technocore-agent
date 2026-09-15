@@ -10,11 +10,9 @@
     <string>/Users/xav/Documents/technocore-agent/.venv/bin/python</string>
     <string>/Users/xav/Documents/technocore-agent/sonnet_cli.py</string>
     <string>countersign</string>
-    <string>any</string>
+    <string>prophet</string>
     <string>--lead</string>
-    <string>did:key:z6MkkiA1NzmPA5k5PyuzLb62B7VeZtdVkkHoJ1oP7a2gzeKz,did:key:z6MkmVhZbUKWmg3r6TTi3SVM3myYJ9BLbWYPSdc5iWPuPhb6,did:key:z6MksZoGczsfxQoVT5rA76CbvKNLHrEzmUvpGbPnW4TAejK6,did:key:z6MkvtgvpCXxPZonhTZkrB71nhMbtkAJgvfydFtZn7WwJGCW,did:key:z6Mkk1ycxTrHTpP7hSjGdXvp4Rah1AoLfXpbPkWosa8a7QmA,did:key:z6MkvcqdTEbo9o9mMvnu7cwVhshjP21VbcZpMZCXa9zs8Ppy,did:key:z6Mko3jKrKCa4ichVvri5cJSN4QGRjM1iYshG7XAFYowLGH2,did:key:z6Mkt5yRjy4wa8PqChuFcdMRWznGJXnXwBSNo7QrLiCM2yRv,did:key:z6MkpMTr9oavSDBsuqi1j68uizVNdectgPXAJyzfqTuW9mKu</string>
-    <string>--release-game</string>
-    <string>rimbaud-gang</string>
+    <string>did:key:z6MkfGCMq51DuxSqLWzXZ71TKgGXQVaVdpn9g55qf9vthSUn</string>
     <string>--live</string>
     <string>--yes</string>
     

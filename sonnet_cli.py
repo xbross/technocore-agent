@@ -363,6 +363,7 @@ def cmd_countersign(cfg, args) -> int:
     # depart : on ne relit pas tout l'historique, seulement ce qui arrive apres le lancement
     page = TechnocoreClient().read(cfg.rooms["discovery"], limit=1)
     cs.cursor = int(page.last_seq or 0) - int(args.lookback)
+    cs.resume()  # liste deja signee avant un redemarrage : une revision du lead doit d'abord la liberer
     if args.once:
         print(json.dumps(cs.step(), indent=1))
         return 0
