@@ -139,3 +139,98 @@ def test_roster_from_unknown_lead_or_wrong_room_is_ignored(tmp_path):
                                   lead_dids={lead.did}, discovery_room=DISC, dry_run=False, sleep=lambda s: None,
                                   now=iter(range(0, 10000)).__next__)
     assert w.step()["action"] == "wait" and client.said == []
+
+
+class LateClient(FakeClient):
+    """Arbitre en retard : les posts sont enregistres mais aucun recu n'arrive tant que deliver() n'est pas appele."""
+
+    def __init__(self, ref):
+        super().__init__(ref)
+        self.late = False
+
+    def say_signed(self, ident, room, text, nonce):
+        if not self.late:
+            return super().say_signed(ident, room, text, nonce)
+        self.said.append(text)
+        return SayResult("", self.add(ident, text), True)
+
+    def deliver(self, ident, rid, status="accepted", reason=""):
+        self.add(self.ref, json.dumps({"type": "sonnet.receipt.v1", "status": status, "reason": reason,
+                                       "request_id": rid, "sender_did": ident.did, "roster_ready": False}))
+
+
+def _signed_then_revised_with_late_referee(tmp_path):
+    ref, me, lead, other, client = _setup(tmp_path)
+    client = LateClient(ref)
+    members = [lead.did, me.did] + ["did:key:z6Mk" + c * 44 for c in "ab"]
+    client.add(lead, team.roster_message("sonnet-2", "h5", "d-sonnet-2-team-h5", 1, members, "l-1"))
+    w = countersign.CounterSigner(client, me, referee_did=ref.did, contest_id="sonnet-2", game_id="h5",
+                                  lead_did=lead.did, discovery_room=DISC, dry_run=False, sleep=lambda s: None,
+                                  now=iter(range(0, 100000)).__next__, receipt_wait_s=10)
+    assert w.step()["action"] == "signed"
+    client.late = True
+    revised = [lead.did, me.did, other.did, members[3]]
+    client.add(lead, team.roster_message("sonnet-2", "h5", "d-sonnet-2-team-h5", 1, revised, "l-2"))
+    return me, client, w, revised
+
+
+def test_late_referee_receipt_keeps_the_revised_list_pending_without_reposting(tmp_path):
+    """Retard de l'arbitre (~90 min observes le 15/09) : retrait et re-signature partent a la suite, sans attendre
+    le recu du retrait, et l'absence de recu ne condamne pas la liste ; rien n'est reposte entre-temps."""
+    me, client, w, revised = _signed_then_revised_with_late_referee(tmp_path)
+    out = w.step()
+    types = [json.loads(t)["type"] for t in client.said]
+    assert types == ["sonnet.roster.v1", "sonnet.withdraw.v1", "sonnet.roster.v1"]
+    assert out["action"] == "pending" and json.loads(client.said[-1])["members"] == revised
+    assert w.step()["action"] == "pending" and len(client.said) == 3
+    assert w.step()["action"] == "pending" and len(client.said) == 3
+
+
+def test_pending_list_is_confirmed_when_the_late_receipt_finally_arrives(tmp_path):
+    me, client, w, revised = _signed_then_revised_with_late_referee(tmp_path)
+    assert w.step()["action"] == "pending"
+    rid = json.loads(client.said[-1])["request_id"]
+    client.deliver(me, json.loads(client.said[-2])["request_id"])  # recu du retrait, sans effet
+    assert w.step()["action"] == "pending"
+    client.deliver(me, rid)
+    out = w.step()
+    assert out["action"] == "signed" and w.signed_members == revised and len(client.said) == 3
+
+
+def test_pending_list_is_abandoned_only_on_a_definitive_rejection(tmp_path):
+    me, client, w, revised = _signed_then_revised_with_late_referee(tmp_path)
+    assert w.step()["action"] == "pending"
+    client.deliver(me, json.loads(client.said[-1])["request_id"], "rejected", "roster: member already frozen")
+    assert w.step()["action"] == "sign-failed"
+    assert w.step()["action"] == "wait" and len(client.said) == 3
+
+
+def test_resume_from_hold_file_restores_the_signed_list_so_a_revision_still_releases_first(tmp_path):
+    """Au redemarrage du service, la liste deja signee est relue depuis le fichier de pause : une revision du lead
+    declenche bien le retrait avant la nouvelle signature (sinon l'arbitre repondrait 'withdraw before changing')."""
+    ref, me, lead, other, client = _setup(tmp_path)
+    members = [lead.did, me.did] + ["did:key:z6Mk" + c * 44 for c in "ab"]
+    hold = tmp_path / "hold.json"
+    hold.write_text(json.dumps({"game": "h5", "members": members, "at": 1.0}), "utf-8")
+    w = countersign.CounterSigner(client, me, referee_did=ref.did, contest_id="sonnet-2", game_id=None,
+                                  lead_dids={lead.did}, discovery_room=DISC, dry_run=False, hold_path=hold,
+                                  release_game="rimbaud-gang", sleep=lambda s: None, now=iter(range(0, 10000)).__next__)
+    assert w.resume() == ("h5", members)
+    client.add(lead, team.roster_message("sonnet-2", "h5", "d-sonnet-2-team-h5", 1, members, "l-repost"))
+    assert w.step()["action"] == "already-signed"
+    revised = [lead.did, me.did, other.did, members[3]]
+    client.add(lead, team.roster_message("sonnet-2", "h5", "d-sonnet-2-team-h5", 1, revised, "l-2"))
+    w.step()
+    posted = [(json.loads(t)["type"], json.loads(t)["game_id"]) for t in client.said]
+    assert posted == [("sonnet.withdraw.v1", "h5"), ("sonnet.roster.v1", "h5")]
+
+
+def test_resume_ignores_a_missing_or_own_team_hold_file(tmp_path):
+    ref, me, lead, other, client = _setup(tmp_path)
+    hold = tmp_path / "hold.json"
+    w = countersign.CounterSigner(client, me, referee_did=ref.did, contest_id="sonnet-2", game_id=None,
+                                  lead_dids={lead.did}, discovery_room=DISC, dry_run=False, hold_path=hold,
+                                  release_game="rimbaud-gang", sleep=lambda s: None, now=iter(range(0, 10000)).__next__)
+    assert w.resume() is None
+    hold.write_text(json.dumps({"game": "rimbaud-gang", "members": [me.did], "at": 1.0}), "utf-8")
+    assert w.resume() is None and w.signed_game is None

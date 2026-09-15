@@ -393,6 +393,7 @@ def cmd_sniper(cfg, args) -> int:
                                    policy=lambda msg, data: sniper.core_policy(sn.cores, args.min_core)(msg, data))
     page = client.read(cfg.rooms["discovery"], limit=1)
     cs.cursor = int(page.last_seq or 0)
+    cs.resume()  # liste deja signee avant un redemarrage : une revision du lead doit d'abord la liberer
     if args.once:
         print(json.dumps(sn.run_once(), indent=1))
         return 0

@@ -10,7 +10,7 @@
     <string>/Users/xav/Documents/technocore-agent/.venv/bin/python</string>
     <string>/Users/xav/Documents/technocore-agent/sonnet_cli.py</string>
     <string>play</string>
-    <string>rimbaud-gang</string>
+    <string>prophet</string>
     <string>--live</string>
     <string>--yes</string>
     <string>--wait-roster</string>

@@ -41,7 +41,8 @@ class CounterSigner:
         self.cursor = 0
         self.signed_game: str | None = None
         self.signed_members: list[str] | None = None
-        self.attempted: set[tuple] = set()  # listes deja tentees : jamais de nouvelle tentative
+        self.attempted: set[tuple] = set()  # listes refusees par l'arbitre : jamais de nouvelle tentative
+        self.pending: dict | None = None  # signature postee, recu de l'arbitre pas encore vu
         self.ready = False
         self._last_nonce = 0
         self._counter = 0
@@ -50,15 +51,35 @@ class CounterSigner:
         self._counter += 1
         return f"xav-{game or self.game_id}-{kind}-{int(self.now() * 1000)}-{self._counter}"
 
-    def _release(self, game: str, what: str) -> bool:
-        """Retire notre consentement sur `game` ; True si accepte (ou deja absent)."""
-        rid = self._rid("wd", game)
-        res = self._post(withdraw_message(self.contest_id, game, rid))
-        rec = self._await_receipt(rid, res.seq or self.cursor)
-        if rec and (rec.get("status") == "accepted" or "missing" in str(rec.get("reason", ""))):
-            return True
-        log.warning("%s: %s non confirme (%s)", game, what, rec)
-        return False
+    def resume(self) -> tuple[str, list[str]] | None:
+        """Relit la liste deja signee depuis le fichier de pause (redemarrage du service) ; None si rien a reprendre."""
+        from pathlib import Path
+        if not self.hold_path or not Path(self.hold_path).exists():
+            return None
+        try:
+            d = json.loads(Path(self.hold_path).read_text("utf-8"))
+        except (ValueError, OSError):
+            return None
+        game, members = d.get("game"), d.get("members")
+        if not isinstance(game, str) or not isinstance(members, list) or game == self.release_game:
+            return None
+        self.signed_game, self.signed_members = game, [str(m) for m in members]
+        log.info("%s: liste deja signee reprise depuis %s (%d membres)", game, self.hold_path, len(members))
+        return game, self.signed_members
+
+    def _receipt_for(self, m, request_id: str) -> dict | None:
+        """Recu de l'arbitre (simple ou groupe) pour notre requete `request_id`, sinon None."""
+        if m.sender != self.referee_did or classify(m, self.room, self.referee_did) != "receipt":
+            return None
+        d = json.loads(m.text)
+        if d.get("type") == "sonnet.receipts.v1":
+            for r in d.get("receipts", []):
+                if r.get("request_id") == request_id and r.get("sender_did") == self.ident.did:
+                    return {**r, "status": d.get("status"), "reason": d.get("reason", "")}
+            return None
+        if d.get("request_id") == request_id and d.get("sender_did") == self.ident.did:
+            return d
+        return None
 
     def _nonce(self) -> int:
         n = max(int(time.time() * 1000), self._last_nonce + 1)
@@ -98,16 +119,9 @@ class CounterSigner:
             try:
                 page = self.client.read(self.room, since=cursor)
                 for m in page.messages:
-                    if m.sender == self.referee_did and classify(m, self.room, self.referee_did) == "receipt":
-                        d = json.loads(m.text)
-                        if d.get("type") == "sonnet.receipts.v1":
-                            for r in d.get("receipts", []):
-                                if r.get("request_id") == request_id and r.get("sender_did") == self.ident.did:
-                                    return {**r, "status": d.get("status"), "reason": d.get("reason", "")}
-                        elif d.get("request_id") == request_id and d.get("sender_did") == self.ident.did:
-                            if d.get("roster_ready") is True:
-                                self.ready = True
-                            return d
+                    rec = self._receipt_for(m, request_id)
+                    if rec:
+                        return rec
                 if page.last_seq is not None:
                     cursor = max(cursor, int(page.last_seq))
             except RateLimited as e:
@@ -126,44 +140,64 @@ class CounterSigner:
 
     def step(self, wait: int | None = None) -> dict:
         page = self.client.read(self.room, since=self.cursor, wait=wait)
-        target = None
+        target, resolution = None, None
         for m in sorted(page.messages, key=lambda m: m.seq):
             self.cursor = max(self.cursor, m.seq)
             data = self.acceptable(m)
             if data:
                 target = data
             elif m.sender == self.referee_did and classify(m, self.room, self.referee_did) == "receipt":
+                if self.pending:
+                    resolution = self._receipt_for(m, self.pending["rid"]) or resolution
                 d = json.loads(m.text)
                 if d.get("sender_did") == self.ident.did and d.get("roster_ready") is True:
                     self.ready = True
+        if resolution is not None:
+            return self._settle(resolution)
         if target is None:
-            return {"action": "wait"}
+            return {"action": "pending"} if self.pending else {"action": "wait"}
         members = list(target["members"])
         game = str(target["game_id"])
         if members == self.signed_members and game == self.signed_game:
             return {"action": "already-signed"}
+        if self.pending and (game, members) == (self.pending["game"], self.pending["members"]):
+            return {"action": "pending"}
         if (game, tuple(members)) in self.attempted:
             return {"action": "wait"}
-        self.attempted.add((game, tuple(members)))
         log.info("%s: roster d'un lead autorise nous nomme (%d membres, gen %s)", game, len(members),
                  target.get("room_generation"))
         if self.dry_run:
             return {"action": "planned", "game": game, "members": members}
-        if self.signed_members is not None and self.signed_game:  # liste revisee ou autre equipe : liberer d'abord
-            if not self._release(self.signed_game, "retrait"):
-                return {"action": "withdraw-failed"}
-            self.signed_members, self.signed_game = None, None
+        # L'arbitre traite les requetes dans l'ordre d'arrivee : le retrait puis la signature partent a la suite,
+        # sans attendre le recu du retrait (l'arbitre a eu jusqu'a 90 min de retard le 15/09).
+        prior = self.signed_game or (self.pending["game"] if self.pending else None)
+        if prior:  # liste revisee ou autre equipe : liberer d'abord
+            self._post(withdraw_message(self.contest_id, prior, self._rid("wd", prior)))
+            self.signed_members, self.signed_game, self.pending = None, None, None
         elif self.release_game and self.release_game != game:  # notre propre equipe (gestionnaire)
-            if not self._release(self.release_game, "liberation de notre equipe"):
-                return {"action": "withdraw-failed"}
+            self._post(withdraw_message(self.contest_id, self.release_game, self._rid("wd", self.release_game)))
         rid = self._rid("roster", game)
         text = roster_message(self.contest_id, game, str(target["poem_room"]), int(target["room_generation"]),
                               members, rid)
         res = self._post(text)
+        self.pending = {"game": game, "members": members, "rid": rid}
         rec = self._await_receipt(rid, res.seq or self.cursor)
-        if not rec or rec.get("status") != "accepted":
-            log.warning("%s: signature non confirmee (%s)", game, rec)
+        if rec is None:
+            log.warning("%s: pas encore de recu de l'arbitre pour %s ; signature en attente, rien n'est reposte",
+                        game, rid)
+            return {"action": "pending", "game": game, "members": members}
+        return self._settle(rec)
+
+    def _settle(self, rec: dict) -> dict:
+        """Applique le recu de l'arbitre a la signature en attente."""
+        game, members = self.pending["game"], self.pending["members"]
+        self.pending = None
+        if rec.get("status") != "accepted":
+            self.attempted.add((game, tuple(members)))  # refus definitif : jamais de nouvelle tentative
+            log.warning("%s: signature refusee (%s)", game, rec)
             return {"action": "sign-failed", "receipt": rec}
+        if rec.get("roster_ready") is True:
+            self.ready = True
         self.signed_members, self.signed_game = members, game
         if self.hold_path:
             from pathlib import Path
@@ -181,12 +215,12 @@ class CounterSigner:
             except (NetworkError, ApiError, RateLimited) as e:
                 log.warning("%s: %s", self.game_id, e)
                 out = {"action": "error"}
-            if out["action"] not in ("wait", "already-signed"):
+            if out["action"] not in ("wait", "already-signed", "pending"):
                 log.info("%s: %s", self.game_id, json.dumps(out)[:300])
             if self.ready:
                 log.info("%s: roster pret ; la contre-signature automatique s'arrete", self.signed_game or self.game_id)
                 return
-            if out["action"] in ("error", "withdraw-failed", "sign-failed"):
+            if out["action"] in ("error", "sign-failed"):
                 self.sleep(60)
             elif stop is not None:
                 stop.wait(poll_seconds)
