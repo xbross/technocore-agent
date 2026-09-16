@@ -105,3 +105,40 @@ def test_wait_for_roster_survives_network_errors():
         return {"members": ["a"], "signed": ["a"], "pending": [], "ready": True, "roster_seq": 1}
 
     assert wait_for_roster(fetch, sleep=lambda s: None, poll_seconds=1)["ready"]
+
+
+def test_reference_list_is_our_own_latest_signature_not_a_stale_repost_by_another_member(tmp_path):
+    """16/09 : le siege 2 a reposte une liste perimee (v6) 40 min apres notre signature de la v7. La liste de
+    reference doit rester celle que NOUS avons signee en dernier, sinon le roster_ready de l'arbitre sur la v7
+    serait ignore et le joueur ne demarrerait jamais."""
+    ref = identity.create(tmp_path / "ref.pem", "pw")
+    lead = identity.create(tmp_path / "lead.pem", "pw")
+    me = identity.create(tmp_path / "me.pem", "pw")
+    seat2 = identity.create(tmp_path / "s2.pem", "pw")
+    v6 = [lead.did, seat2.did, me.did, "did:key:z6Mk" + "a" * 44]
+    v7 = [lead.did, seat2.did, me.did, "did:key:z6Mk" + "b" * 44]
+    receipt = lambda rid, sender, ready: json.dumps({"type": "sonnet.receipt.v1", "status": "accepted", "request_id": rid,
+                                                    "sender_did": sender, "roster_ready": ready})
+    msgs = [
+        _msg(lead, 1, team.roster_message("sonnet-2", "g", "d-sonnet-2-team-g", 2, v7, "l-7"), 1),
+        _msg(me, 2, team.roster_message("sonnet-2", "g", "d-sonnet-2-team-g", 2, v7, "me-7"), 1),
+        _msg(seat2, 3, team.roster_message("sonnet-2", "g", "d-sonnet-2-team-g", 2, v6, "s2-6"), 1),  # perime
+        _msg(ref, 4, receipt("l-7", lead.did, False), 1),
+        _msg(ref, 5, receipt("me-7", me.did, False), 2),
+        _msg(ref, 6, receipt("s2-6", seat2.did, False), 3),
+    ]
+    st = roster_status(msgs, ROOM, ref.did, "g", me.did)
+    assert st["members"] == v7 and st["roster_seq"] == 2
+    assert st["signed"] == [lead.did, me.did] and seat2.did in st["pending"]
+    msgs.append(_msg(ref, 7, receipt("l-7", lead.did, True), 4))
+    assert roster_status(msgs, ROOM, ref.did, "g", me.did)["ready"] is True
+
+
+def test_reference_list_falls_back_to_the_latest_list_naming_us_before_we_sign(tmp_path):
+    ref = identity.create(tmp_path / "ref.pem", "pw")
+    lead = identity.create(tmp_path / "lead.pem", "pw")
+    me = identity.create(tmp_path / "me.pem", "pw")
+    members = [lead.did, me.did] + ["did:key:z6Mk" + c * 44 for c in "ab"]
+    msgs = [_msg(lead, 1, team.roster_message("sonnet-2", "g", "d-sonnet-2-team-g", 2, members, "l-1"), 1)]
+    st = roster_status(msgs, ROOM, ref.did, "g", me.did)
+    assert st["members"] == members and st["roster_seq"] == 1 and st["signed"] == []

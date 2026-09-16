@@ -15,8 +15,10 @@ def roster_status(messages, room: str, referee_did: str, game_id: str, my_did: s
     donc pas l'ancien recu. Un retrait accepte apres la signature annule le consentement."""
     ordered = sorted(messages, key=lambda m: m.seq)
     posts: dict[tuple[str, str], list[tuple[int, str, list[str], str]]] = {}
-    latest: list[str] | None = None
+    latest: list[str] | None = None  # derniere liste nous nommant, postee par n'importe qui
     latest_seq = 0
+    mine: list[str] | None = None  # derniere liste que NOUS avons signee : c'est elle qui fait reference
+    mine_seq = 0
     for msg in ordered:
         if msg.sender == referee_did or not msg.signed:
             continue
@@ -32,8 +34,14 @@ def roster_status(messages, room: str, referee_did: str, game_id: str, my_did: s
             posts.setdefault((msg.sender, str(data.get("request_id"))), []).append((msg.seq, "roster", members, game_id))
             if my_did in members and msg.seq > latest_seq:
                 latest, latest_seq = members, msg.seq
+            if msg.sender == my_did and my_did in members and msg.seq > mine_seq:
+                mine, mine_seq = members, msg.seq
         elif kind == "sonnet.withdraw.v1":
             posts.setdefault((msg.sender, str(data.get("request_id"))), []).append((msg.seq, "withdraw", [], game_id))
+    # Un autre membre peut reposter une liste perimee apres notre signature : la reference reste
+    # notre propre derniere signature, sinon le roster_ready de l'arbitre serait manque.
+    if mine is not None:
+        latest, latest_seq = mine, mine_seq
     signed_at: dict[str, int] = {}
     ready = False
     if latest is not None:
