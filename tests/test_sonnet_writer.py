@@ -165,3 +165,26 @@ def test_script_word_must_still_pass_the_official_validator(tmp_path):
     with pytest.raises(ValueError):
         w.turn(st)
     assert client.said == []
+
+
+def test_wait_for_script_blocks_until_a_valid_script_file_appears(tmp_path):
+    """Au roster_ready, le joueur n'invente aucun mot : il attend le fichier {version: mot} construit a partir de
+    la table du lead. Un fichier illisible ne suffit pas ; l'arret propre rend None."""
+    import json
+    import threading
+    from technocore_agent.sonnet.writer import wait_for_script
+    path = tmp_path / "script.json"
+    ticks = []
+
+    def sleep(s):
+        ticks.append(s)
+        if len(ticks) == 1:
+            path.write_text("{pas du json", "utf-8")
+        elif len(ticks) == 3:
+            path.write_text(json.dumps({"3": "hive", "7": "sun"}), "utf-8")
+
+    assert wait_for_script(path, sleep=sleep, poll_seconds=5) == {3: "hive", 7: "sun"}
+    assert len(ticks) == 3
+    stop = threading.Event()
+    stop.set()
+    assert wait_for_script(tmp_path / "absent.json", sleep=sleep, poll_seconds=5, stop=stop) is None

@@ -252,3 +252,27 @@ class Writer:
                 outcome = self.await_receipt(state, prop, wait_seconds=receipt_wait, sleep=sleep, long_poll=long_poll)
                 if outcome is None:
                     log.warning("%s: pas de recu pour %r ; l'etat sera relu", state.game_id, prop.word)
+
+
+def wait_for_script(path, sleep=None, poll_seconds: float = 20.0, stop=None) -> dict[int, str] | None:
+    """Attend le fichier script {version: mot} (table du lead transcrite a la main) : sans lui, le joueur ne poste
+    aucun mot de son cru dans un poeme pre-ecrit par l'equipe. None si l'arret est demande avant."""
+    import time
+    from pathlib import Path
+    sleep = sleep or time.sleep
+    path = Path(path)
+    warned = False
+    while not (stop is not None and stop.is_set()):
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text("utf-8"))
+                script = {int(k): str(v) for k, v in raw.items()}
+                log.info("script charge depuis %s : %d versions assignees", path, len(script))
+                return script
+            except (ValueError, AttributeError) as e:
+                log.warning("script %s illisible (%s), nouvel essai", path, e)
+        elif not warned:
+            log.warning("attente du script %s : transcrire la table du lead (room d'equipe) avant tout mot", path)
+            warned = True
+        sleep(poll_seconds)
+    return None
