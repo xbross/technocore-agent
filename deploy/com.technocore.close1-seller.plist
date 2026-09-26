@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.technocore.close1-seller</string>
+
+  <!-- VENDEUR close-1 (ECRITURE) : vente d'environ 43 contrats validee par Xav le 26/09 ("go pour la vente").
+       S'arrete seul a la cible (sortie 0 => pas de relance) ; relance seulement en cas de plantage. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/xav/Documents/technocore-agent/.venv/bin/python</string>
+    <string>/Users/xav/Documents/technocore-agent/close1_cli.py</string>
+    <string>sell</string>
+    <string>--target</string>
+    <string>43</string>
+    <string>--live</string>
+    <string>--yes</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/xav/Documents/technocore-agent</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TECHNOCORE_PASSPHRASE_KEYCHAIN</key>
+    <string>technocore-agent</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/xav/Documents/technocore-agent/logs/close1-launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/xav/Documents/technocore-agent/logs/close1-launchd.err.log</string>
+</dict>
+</plist>

@@ -63,3 +63,13 @@ def test_bad_permissions_refused(tmp_path):
     path.chmod(0o644)
     with pytest.raises(identity.IdentityError):
         identity.load(path, "s")
+
+
+def test_sign_raw_signs_exact_bytes_and_verify_raw_checks_them(tmp_path):
+    """Les echanges close-1 se signent sur 'close-1|terms|...', pas au format room|nonce|text."""
+    ident = identity.create(tmp_path / "k.pem", "pw")
+    sig = ident.sign_raw(b"close-1|terms|{}")
+    assert len(sig) == 86 and "=" not in sig
+    assert identity.verify_raw(ident.did, b"close-1|terms|{}", sig)
+    assert not identity.verify_raw(ident.did, b"close-1|terms|{ }", sig)
+    assert not identity.verify_raw(ident.did, b"close-1|terms|{}", "A" * 86)

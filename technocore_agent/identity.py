@@ -55,6 +55,18 @@ def signing_payload(room: str, nonce: int, text: str) -> bytes:
     return f"{room}|{nonce}|{text}".encode("utf-8")
 
 
+def verify_raw(did: str, payload: bytes, sig_b64url: str) -> bool:
+    """Verifie une signature Ed25519 base64url (sans padding) sur des octets exacts. True si valide."""
+    from cryptography.exceptions import InvalidSignature
+
+    try:
+        sig = base64.urlsafe_b64decode(sig_b64url + "=" * (-len(sig_b64url) % 4))
+        Ed25519PublicKey.from_public_bytes(public_bytes_from_did(did)).verify(sig, payload)
+        return True
+    except (InvalidSignature, ValueError, IdentityError):
+        return False
+
+
 def verify(did: str, room: str, nonce: int, text: str, sig_b64url: str) -> bool:
     """Verifie une signature telle que servie par le serveur. True si valide."""
     from cryptography.exceptions import InvalidSignature
@@ -92,6 +104,10 @@ class Identity:
         """Forme courte 'z6Mk...XXXX' comme le serveur l'affiche."""
         body = self.did[len("did:key:"):]
         return f"{body[:4]}...{body[-4:]}"
+
+    def sign_raw(self, payload: bytes) -> str:
+        """Signature Ed25519 d'octets exacts, base64url sans padding (86 caracteres)."""
+        return base64.urlsafe_b64encode(self._private_key.sign(payload)).decode("ascii").rstrip("=")
 
     def sign(self, room: str, nonce: int, text: str) -> str:
         """Signature de `room|nonce|text`, base64url sans padding (86 caracteres)."""
