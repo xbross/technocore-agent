@@ -177,13 +177,14 @@ class Ledger:
 class Seller:
     def __init__(self, client, ident, referee_did: str, ledger_path, target: Decimal, dry_run: bool = True,
                  max_posts_per_sweep: int = 8, max_posts_total: int = 300, min_ratio: Decimal = Decimal("0.99"),
-                 premium: Decimal = Decimal("0.005"), offer_chunk: Decimal = Decimal("11"), lock_sweep: int = 2556,
+                 premium: Decimal = Decimal("0.005"), premium_step: Decimal = Decimal("0.001"),
+                 offer_chunk: Decimal = Decimal("11"), lock_sweep: int = 2556,
                  guard_s: float = 20.0, now=time.time, sleep=time.sleep):
         self.client, self.ident, self.referee = client, ident, referee_did
         self.me = ident.did
         self.target, self.dry_run = Decimal(target), dry_run
         self.max_posts_per_sweep, self.max_posts_total = max_posts_per_sweep, max_posts_total
-        self.min_ratio, self.premium, self.offer_chunk = min_ratio, premium, offer_chunk
+        self.min_ratio, self.premium, self.premium_step, self.offer_chunk = min_ratio, premium, premium_step, offer_chunk
         self.lock_sweep, self.guard_s, self.now, self.sleep = lock_sweep, guard_s, now, sleep
         self.ledger = Ledger(ledger_path)
         self._counter = 0
@@ -244,6 +245,10 @@ class Seller:
         self._ingest_flow()
         self.ledger.expire_offers(sweep.n)
         filled = self.ledger.filled()
+        d = self.ledger.data
+        if "last_fill_sweep" not in d or filled > Decimal(d.get("last_filled", "0")):
+            d["last_filled"], d["last_fill_sweep"] = str(filled), sweep.n
+            self.ledger.save()
         if filled >= self.target:
             return {"action": "done", "filled": str(filled), "sweep": sweep.n}
         if sweep.n >= self.lock_sweep:
@@ -271,7 +276,9 @@ class Seller:
         # une seule offre ouverte a la fois : le reste de la cible reste disponible pour servir les acheteurs
         if remaining >= trade.MIN_QTY and budget > 0 and self.ledger.open_offer_qty() == 0:
             qty = min(remaining, self.offer_chunk).quantize(trade.CENT, rounding=ROUND_DOWN)
-            px = min((sweep.ref * (1 + self.premium)).quantize(trade.CENT, rounding=ROUND_HALF_UP), sweep.hi)
+            idle = max(0, sweep.n - int(d["last_fill_sweep"]))
+            premium = max(Decimal(0), self.premium - self.premium_step * idle)
+            px = min((sweep.ref * (1 + premium)).quantize(trade.CENT, rounding=ROUND_HALF_UP), sweep.hi)
             terms = trade.make_terms(self._rid(), self.me, "sell", qty, px, "any", sweep.n + 1)
             text = trade.offer_text(terms, trade.sign_maker(self.ident, terms))
             plan.append({"kind": "offer", "id": terms["id"], "qty": terms["qty"], "px": terms["px"], "until": terms["until"]})
@@ -296,7 +303,7 @@ class Seller:
                 continue
             if out["action"] in ("posted", "planned"):
                 log.info("balayage %s ref %s : %s", out["sweep"], out["ref"], json.dumps(out["plan"]))
-            if out.get("filled") != last_filled:
+            if "filled" in out and out["filled"] != last_filled:
                 last_filled = out.get("filled")
                 log.info("execute (compte prudent) : %s / %s | %s", last_filled, self.target, json.dumps(self.ledger.summary()))
             if out["action"] in ("done", "locked", "capped"):

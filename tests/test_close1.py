@@ -163,3 +163,19 @@ def test_only_one_open_offer_at_a_time_so_bids_can_still_be_served(ids, tmp_path
     out = s.step()                                                      # mais une offre d'achat reste servie
     assert out["action"] == "posted" and [p["kind"] for p in out["plan"]] == ["take"]
     assert c.said[-1]["terms"]["id"] == "late"
+
+
+def test_offer_price_steps_down_to_the_reference_while_nothing_fills_and_resets_after_a_fill(ids, tmp_path):
+    """Repli valide par Xav : '+1 % puis au prix de reference si personne ne prend'. -0,1 % par balayage sans
+    execution, jamais sous la reference ; retour a +0,5 % des qu'une vente passe."""
+    c = FakeClient(ids)
+    c.price(20)
+    s = _seller(ids, tmp_path, c, target=D("43"))
+    s.ledger.data.update({"last_filled": "0", "last_fill_sweep": 17})
+    assert D(s.step()["plan"][0]["px"]) == D("225.45")      # +0,5 % - 3 x 0,1 %
+    c.price(30)
+    assert D(s.step()["plan"][0]["px"]) == D("225.00")      # plancher : la reference
+    s.ledger.add_taken("f", D("1"), D("224.9"), applies=30)
+    s.ledger.data["trades"]["f"]["status"] = "settled"
+    c.price(31)
+    assert D(s.step()["plan"][0]["px"]) == D("226.13")      # une vente est passee : retour a +0,5 %
